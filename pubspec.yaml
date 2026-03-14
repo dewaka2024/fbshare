@@ -33,3 +33,5 @@ flutter:
     - assets/scripts/fb_post_isolate_only.js
     - assets/scripts/fb_interaction_bar_detector.js
     - assets/scripts/fb_find_share_btn.js
+    - assets/scripts/fb_interaction_bar_highlight.js
+    - assets/scripts/fb_bar_deep_scan.js
