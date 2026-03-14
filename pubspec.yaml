@@ -1,0 +1,35 @@
+name: fb_share_automation
+description: Facebook Share-to-Group Automation Desktop App for Windows.
+publish_to: 'none'
+version: 3.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: '>=3.10.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  webview_windows: ^0.3.0
+  provider: ^6.1.2
+  shared_preferences: ^2.2.3
+  path_provider: ^2.1.2
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/scripts/deep_scan.js
+    - assets/scripts/fb_post_isolate.js
+    - assets/scripts/fb_mobile_frame_injector.js
+    - assets/scripts/fb_photo_viewer_launcher.js
+    - assets/scripts/fb_linked_post_detector.js
+    - assets/scripts/fb_share_button_detector.js
+    - assets/scripts/fb_post_isolate_only.js
+    - assets/scripts/fb_interaction_bar_detector.js
+    - assets/scripts/fb_find_share_btn.js
