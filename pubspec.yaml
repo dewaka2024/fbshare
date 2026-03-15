@@ -24,14 +24,5 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/scripts/deep_scan.js
-    - assets/scripts/fb_post_isolate.js
-    - assets/scripts/fb_mobile_frame_injector.js
-    - assets/scripts/fb_photo_viewer_launcher.js
-    - assets/scripts/fb_linked_post_detector.js
-    - assets/scripts/fb_share_button_detector.js
-    - assets/scripts/fb_post_isolate_only.js
-    - assets/scripts/fb_interaction_bar_detector.js
-    - assets/scripts/fb_find_share_btn.js
-    - assets/scripts/fb_interaction_bar_highlight.js
-    - assets/scripts/fb_bar_deep_scan.js
+    - assets/scripts/fb_master_script.js
+    - assets/scripts/fb_group_scraper.js
