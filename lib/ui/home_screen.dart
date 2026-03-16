@@ -461,7 +461,42 @@ class _PageHeader extends StatelessWidget {
           ),
           const SizedBox(width: 10),
 
-          // Control panel toggle — compact icon button
+          // Deep Sync button
+          Tooltip(
+            message: prov.isDeepSyncing
+                ? 'Processing group ${prov.deepSyncIndex + 1} of ${prov.groups.length}'
+                : 'Deep Sync — resolve real URLs for each group',
+            child: ElevatedButton.icon(
+              onPressed: prov.webViewReady && prov.groups.isNotEmpty
+                  ? (prov.isDeepSyncing
+                      ? () => prov.stopDeepSync()
+                      : () => prov.deepSync())
+                  : null,
+              icon: prov.isDeepSyncing
+                  ? const SizedBox(
+                      width: 13, height: 13,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 1.8, color: Colors.white))
+                  : const Icon(Icons.travel_explore_rounded, size: 15),
+              label: Text(prov.isDeepSyncing
+                  ? 'Stop (${prov.deepSyncIndex + 1}/${prov.groups.length})'
+                  : 'Deep Sync'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor:
+                    prov.isDeepSyncing ? _amber : const Color(0xFF7C3AED),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 10),
+                textStyle: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(9)),
+                elevation: 0,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          // Settings
           Tooltip(
             message: 'Automation settings',
             child: _IconBtn(
@@ -542,7 +577,10 @@ class _GroupsListColumn extends StatelessWidget {
                     itemBuilder: (_, i) {
                       final g = prov.groups[i];
                       return _GroupRowCard(
+                        key: ValueKey(g.name),
                         group: g,
+                        active: prov.isDeepSyncing &&
+                            prov.highlightedGroup == g.name,
                         onTap: () => prov.navigateToGroup(g),
                       );
                     },
@@ -557,8 +595,14 @@ class _GroupsListColumn extends StatelessWidget {
 // ── Group row card ─────────────────────────────────────────────────────────────
 class _GroupRowCard extends StatefulWidget {
   final FBGroup group;
+  final bool    active;   // true when deepSync is processing this row
   final VoidCallback onTap;
-  const _GroupRowCard({required this.group, required this.onTap});
+  const _GroupRowCard({
+    super.key,
+    required this.group,
+    required this.onTap,
+    this.active = false,
+  });
   @override
   State<_GroupRowCard> createState() => _GroupRowCardState();
 }
@@ -568,66 +612,136 @@ class _GroupRowCardState extends State<_GroupRowCard> {
 
   @override
   Widget build(BuildContext context) {
+    final active  = widget.active;
+    final hasUrl  = widget.group.url.isNotEmpty;
+    final hasId   = widget.group.groupId.isNotEmpty;
+
+    // Subtitle: show groupId badge + short URL if available
+    final subtitle = hasUrl
+        ? _shortUrl(widget.group.url)
+        : 'Index ${widget.group.index}';
+
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit:  (_) => setState(() => _hovered = false),
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
+          duration: const Duration(milliseconds: 150),
           margin: const EdgeInsets.only(bottom: 6),
-          padding: const EdgeInsets.symmetric(
-              horizontal: 12, vertical: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
-            color: _hovered ? const Color(0xFF1F2433) : _card,
+            // Active row: bright blue glow
+            color: active
+                ? _accent.withValues(alpha: .15)
+                : _hovered
+                    ? const Color(0xFF1F2433)
+                    : _card,
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
-              color: _hovered
-                  ? _accent.withValues(alpha: .3)
-                  : _border,
-              width: _hovered ? 1.5 : 1,
+              color: active
+                  ? _accent
+                  : _hovered
+                      ? _accent.withValues(alpha: .3)
+                      : _border,
+              width: active ? 1.5 : (_hovered ? 1.5 : 1),
             ),
+            boxShadow: active
+                ? [BoxShadow(
+                    color: _accent.withValues(alpha: .25),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2))]
+                : null,
           ),
           child: Row(
             children: [
-              // Leading: CircleAvatar
+              // Leading avatar
               _GroupCircleAvatar(imageUrl: widget.group.imageUrl),
-              const SizedBox(width: 12),
-              // Title + subtitle
+              const SizedBox(width: 10),
+
+              // Name + subtitle row
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      widget.group.name,
-                      style: TextStyle(
-                          color: _hovered ? _accentL : _text,
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w600),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    // Group name + active spinner
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            widget.group.name,
+                            style: TextStyle(
+                                color: active
+                                    ? Colors.white
+                                    : _hovered ? _accentL : _text,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (active) ...[
+                          const SizedBox(width: 6),
+                          const SizedBox(
+                            width: 11, height: 11,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 1.8,
+                                color: _accentL),
+                          ),
+                        ],
+                      ],
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      widget.group.url.isNotEmpty
-                          ? widget.group.url
-                          : 'Index #${widget.group.index}',
-                      style: const TextStyle(
-                          color: _sub, fontSize: 10),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    const SizedBox(height: 3),
+                    // groupId badge + URL
+                    Row(
+                      children: [
+                        if (hasId) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 5, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: _green.withValues(alpha: .15),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                  color: _green.withValues(alpha: .3)),
+                            ),
+                            child: Text(
+                              'ID: ${widget.group.groupId}',
+                              style: const TextStyle(
+                                  color: _green,
+                                  fontSize: 8.5,
+                                  fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+                        Expanded(
+                          child: Text(
+                            subtitle,
+                            style: TextStyle(
+                                color: active ? _accentL : _sub,
+                                fontSize: 9.5),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
-              // Trailing: checkmark
+
+              const SizedBox(width: 6),
+              // Trailing: green check if URL resolved, grey otherwise
               AnimatedOpacity(
-                opacity: _hovered ? 1 : 0.35,
-                duration: const Duration(milliseconds: 120),
+                opacity: active ? 1 : (_hovered ? 1 : 0.4),
+                duration: const Duration(milliseconds: 150),
                 child: Icon(
-                  Icons.check_circle_rounded,
-                  size: 16,
-                  color: _hovered ? _green : _sub,
+                  hasUrl
+                      ? Icons.check_circle_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  size: 15,
+                  color: hasUrl ? _green : _sub,
                 ),
               ),
             ],
@@ -635,6 +749,15 @@ class _GroupRowCardState extends State<_GroupRowCard> {
         ),
       ),
     );
+  }
+
+  String _shortUrl(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return url;
+    final segs = uri.pathSegments
+        .where((s) => s.isNotEmpty && s != 'groups')
+        .join('/');
+    return segs.isEmpty ? uri.host : segs;
   }
 }
 

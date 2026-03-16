@@ -37,27 +37,57 @@ class FBGroup {
   final String imageUrl;
   /// Canonical group URL — present only when extractable, otherwise empty.
   final String url;
+  /// Short group ID extracted from the URL path (e.g. "1234567890" or "mygroup").
+  /// Empty until deepSync resolves the real URL.
+  final String groupId;
 
   const FBGroup({
     required this.name,
     required this.index,
     this.imageUrl = '',
     this.url      = '',
+    this.groupId  = '',
   });
+
+  /// Extract a short group ID from a Facebook group URL.
+  /// https://www.facebook.com/groups/1234567890/ → "1234567890"
+  static String extractGroupId(String url) {
+    if (url.isEmpty) return '';
+    final uri = Uri.tryParse(url);
+    if (uri == null) return '';
+    final segments = uri.pathSegments
+        .where((s) => s.isNotEmpty && s != 'groups')
+        .toList();
+    return segments.isNotEmpty ? segments.first : '';
+  }
+
+  /// Returns a copy with a new URL (and auto-computed groupId).
+  FBGroup withUrl(String newUrl) => FBGroup(
+    name:     name,
+    index:    index,
+    imageUrl: imageUrl,
+    url:      newUrl,
+    groupId:  extractGroupId(newUrl),
+  );
 
   Map<String, dynamic> toJson() => {
         'name':     name,
         'index':    index,
         'imageUrl': imageUrl,
         'url':      url,
+        'groupId':  groupId,
       };
 
-  factory FBGroup.fromJson(Map<String, dynamic> j) => FBGroup(
-        name:     j['name']     as String? ?? 'Unknown Group',
-        index:    (j['index']   as num?  )?.toInt() ?? -1,
-        imageUrl: j['imageUrl'] as String? ?? '',
-        url:      j['url']      as String? ?? '',
-      );
+  factory FBGroup.fromJson(Map<String, dynamic> j) {
+    final url = j['url'] as String? ?? '';
+    return FBGroup(
+      name:     j['name']     as String? ?? 'Unknown Group',
+      index:    (j['index']   as num?  )?.toInt() ?? -1,
+      imageUrl: j['imageUrl'] as String? ?? '',
+      url:      url,
+      groupId:  j['groupId']  as String? ?? FBGroup.extractGroupId(url),
+    );
+  }
 }
 
 /// A saved Facebook post link with its original URL and a desktop-safe embed URL.
@@ -464,15 +494,25 @@ class AutomationProvider extends ChangeNotifier {
   String? _groupsError;
 
   // Sync progress state
-  bool _isSyncing   = false;
-  int  _groupsFound = 0;
+  bool _isSyncing    = false;
+  int  _groupsFound  = 0;
   StreamSubscription<dynamic>? _webMsgSub;
+
+  // ── Deep sync state ────────────────────────────────────────────────────
+  bool   _isDeepSyncing     = false;
+  bool   _stopDeepSync      = false;
+  int    _deepSyncIndex     = 0;
+  String _highlightedGroup  = ''; // name of group currently being processed
+  final List<FBGroup> _deepSyncResults = [];
 
   List<FBGroup> get groups         => List.unmodifiable(_groups);
   bool          get groupsFetching => _groupsFetching;
   String?       get groupsError    => _groupsError;
   bool          get isSyncing      => _isSyncing;
   int           get groupsFound    => _groupsFound;
+  bool          get isDeepSyncing    => _isDeepSyncing;
+  int           get deepSyncIndex    => _deepSyncIndex;
+  String        get highlightedGroup => _highlightedGroup;
 
   // ── Prefs keys ─────────────────────────────────────────────────────────────
   static const _kUrl    = 'fb_post_url';
@@ -832,6 +872,327 @@ class AutomationProvider extends ChangeNotifier {
     _groupsError = null;
     _savePrefs();
     notifyListeners();
+  }
+
+  // ── Deep Sync ──────────────────────────────────────────────────────────────
+  //
+  // Phase 2 sync: after fetchGroups() gives us a list of groups with
+  // names but potentially missing URLs, deepSync clicks each group,
+  // WAITS for navigationCompleted, captures the real URL, then goes back
+  // and WAITS for the groups list to reload before moving to the next.
+  //
+  // Uses a Completer-based _waitForNavigation() helper rather than fixed
+  // delays so it adapts automatically to slow Sri Lankan connections.
+  //
+  // ── Deep Sync ──────────────────────────────────────────────────────────────
+  //
+  // Strategy: direct URL navigation only.
+  //
+  // window.navigateToGroup() is registered only while scraper JS is live.
+  // After fetchGroups() completes the page may have navigated away, so the
+  // function is gone.  Instead we use loadUrl() for every group that has a
+  // URL, or skip groups with no URL (index-only entries from the old scraper).
+  //
+  // Flow per group:
+  //   loadUrl(group.url)
+  //   → _waitForNavigation()      wait for navigationCompleted
+  //   → _getFinalUrl()            capture resolved URL
+  //   → loadUrl(groups page)      go back via fresh navigation (reliable)
+  //   → _waitForNavigation()      wait for list page to reload
+  //
+  // ── Deep Sync v2 ───────────────────────────────────────────────────────────
+  //
+  // For each group (starting at index 1, skipping index 0 which is usually
+  // "Create a group" or a navigation item):
+  //
+  //   1. Navigate to facebook.com/groups/ if not already there.
+  //   2. Highlight the group row (JS border flash).
+  //   3. Click via navigateToGroup(index) — JS DOM click, triggers FB router.
+  //   4. Listen to _urlStream (address bar) to detect when URL changes to a
+  //      real /groups/<id> URL — more reliable than fixed delays.
+  //   5. Strip query params, extract groupId from path.
+  //   6. Save URL + groupId back to _groups[i].withUrl().
+  //   7. Navigate back to /groups/ and wait before the next group.
+  //
+  // ── Deep Sync ──────────────────────────────────────────────────────────────
+  //
+  // Simple, reliable approach:
+  //   1. Take every group that already has a URL from fetchGroups().
+  //   2. Navigate to it with loadUrl().
+  //   3. Wait for navigationCompleted.
+  //   4. Capture final URL from address bar (resolves redirects).
+  //   5. Extract groupId from path.
+  //   6. Save back to group list — live UI update.
+  //
+  // No JS DOM scanning. No click simulation. Just loadUrl().
+  //
+  // ── Deep Sync ──────────────────────────────────────────────────────────────
+  //
+  // Correct flow per user requirement:
+  //   1. Navigate to facebook.com/groups/ — same as Sync Groups does.
+  //   2. For each group row (by index from __foundGroups):
+  //      a. Scroll to the row so it's visible.
+  //      b. Find the first <a href="/groups/..."> anchor INSIDE that row.
+  //      c. Call anchor.click() — this is a real click on a real <a> tag,
+  //         which Facebook's msite router DOES handle correctly.
+  //      d. Listen to _urlStream — wait until address bar URL changes to
+  //         a /groups/<id> page (not the list root).
+  //      e. Save that URL + extract groupId.
+  //      f. Press browser Back (history.back()) to return to groups list.
+  //      g. Wait for groups list to reload, then do next group.
+  //
+  Future<void> deepSync() async {
+    if (_wvc == null) {
+      _setStatus(AutomationStatus.error, '❌ WebView not ready.');
+      return;
+    }
+    if (_groups.isEmpty) {
+      _setStatus(AutomationStatus.error,
+          '❌ No groups. Run Sync Groups first.');
+      return;
+    }
+
+    _isDeepSyncing    = true;
+    _stopDeepSync     = false;
+    _deepSyncIndex    = 0;
+    _highlightedGroup = '';
+    _deepSyncResults.clear();
+    notifyListeners();
+
+    final total = _groups.length;
+
+    try {
+      // ── Step 1: Go to groups page ──────────────────────────────────
+      _setStatus(AutomationStatus.navigating,
+          '🔄 Deep Sync: opening groups page…');
+      await _wvc!.loadUrl('https://www.facebook.com/groups/');
+      await _waitForNavigation(timeoutMs: 25000, extraMs: 3000);
+      if (_stopDeepSync) return;
+
+      // ── Step 2: Re-run scraper so __foundGroups is fresh ───────────
+      _setStatus(AutomationStatus.running,
+          '🔄 Deep Sync: scanning group list…');
+      final script =
+          await rootBundle.loadString('assets/scripts/fb_group_scraper.js');
+      await _wvc!.executeScript(script);
+      // Give scraper scroll loop time to complete (it auto-scrolls)
+      // We just need __foundGroups registered — wait for FINAL_DATA msg
+      // or just wait a bit for the initial registration
+      await Future.delayed(const Duration(seconds: 4));
+      if (_stopDeepSync) return;
+
+      // ── Step 3: Process each group ─────────────────────────────────
+      for (int i = 0; i < total; i++) {
+        if (_stopDeepSync) break;
+
+        _deepSyncIndex    = i;
+        _highlightedGroup = _groups[i].name;
+        _setStatus(
+          AutomationStatus.running,
+          '🔄 Deep Sync ${i + 1}/$total — ${_groups[i].name}',
+        );
+        notifyListeners();
+
+        // ── 3a. Ensure we are on the groups list page ─────────────────
+        final curUrl = await _getFinalUrl() ?? '';
+        final onList = curUrl.contains('facebook.com/groups') &&
+            !RegExp(r'facebook\.com/groups/[^/?]+').hasMatch(curUrl);
+        if (!onList) {
+          await _wvc!.loadUrl('https://www.facebook.com/groups/');
+          await _waitForNavigation(timeoutMs: 20000, extraMs: 2500);
+          if (_stopDeepSync) break;
+          // Re-run scraper to restore __foundGroups
+          await _wvc!.executeScript(script);
+          await Future.delayed(const Duration(seconds: 3));
+        }
+
+        // ── 3b. Scroll to group row + highlight ───────────────────────
+        final idx = _groups[i].index;
+        await _wvc!.executeScript(
+          '(function(){'
+          // Clear previous highlights
+          '  if(window.__foundGroups){'
+          '    window.__foundGroups.forEach(function(el){'
+          '      el.style.outline="";el.style.background="";'
+          '    });'
+          '  }'
+          // Highlight current row
+          '  var el=window.__foundGroups&&window.__foundGroups[$idx];'
+          '  if(el){'
+          '    el.scrollIntoView({behavior:"smooth",block:"center"});'
+          '    el.style.outline="3px solid #1877F2";'
+          '    el.style.background="rgba(24,119,242,0.12)";'
+          '  }'
+          '})();'
+        );
+        await Future.delayed(const Duration(milliseconds: 700));
+        if (_stopDeepSync) break;
+
+        // ── 3c. Click the anchor <a> tag inside the group row ─────────
+        // anchor.click() on actual <a href="/groups/xxx"> tag triggers
+        // Facebook's msite router correctly — unlike MouseEvent dispatch.
+        final dynamic clickResult = await _wvc!.executeScript(
+          '(function(){'
+          '  var el=window.__foundGroups&&window.__foundGroups[$idx];'
+          '  if(!el) return "no_element";'
+          '  var anchors=el.querySelectorAll("a[href]");'
+          '  for(var i=0;i<anchors.length;i++){'
+          '    var h=anchors[i].getAttribute("href")||"";'
+          '    if(h.indexOf("/groups/")!==-1){'
+          '      anchors[i].click();'
+          '      return "clicked:"+h;'
+          '    }'
+          '  }'
+          // Fallback: click the row element itself
+          '  el.click();'
+          '  return "row_clicked";'
+          '})();'
+        );
+        debugPrint('[deepSync] #$i click result: $clickResult');
+
+        // ── 3d. Watch address bar for URL change ──────────────────────
+        // Resolve when URL becomes a specific group page
+        final urlCompleter = Completer<String>();
+        StreamSubscription<String>? urlSub;
+
+        // Timeout after 20s
+        final timer = Future.delayed(const Duration(seconds: 20), () {
+          if (!urlCompleter.isCompleted) urlCompleter.complete('');
+        });
+
+        urlSub = _urlStream?.listen((url) {
+          if (urlCompleter.isCompleted) return;
+          // URL must be a group page, not the list root
+          if (RegExp(r'facebook\.com/groups/[^/?#]+').hasMatch(url)) {
+            urlSub?.cancel();
+            urlCompleter.complete(url.split('?').first);
+          }
+        });
+
+        // Also wait for navigation to complete
+        _waitForNavigation(timeoutMs: 18000, extraMs: 500).then((_) {
+          if (!urlCompleter.isCompleted) {
+            _getFinalUrl().then((u) {
+              if (u != null &&
+                  RegExp(r'facebook\.com/groups/[^/?#]+').hasMatch(u) &&
+                  !urlCompleter.isCompleted) {
+                urlCompleter.complete(u.split('?').first);
+              }
+            });
+          }
+        });
+
+        final resolvedUrl = await urlCompleter.future;
+        await urlSub?.cancel();
+        timer.ignore();
+
+        if (_stopDeepSync) break;
+
+        debugPrint('[deepSync] #$i resolved: $resolvedUrl');
+
+        // ── 3e. Save URL + groupId ────────────────────────────────────
+        if (resolvedUrl.isNotEmpty) {
+          final updated = _groups[i].withUrl(resolvedUrl);
+          _groups[i] = updated;
+          _deepSyncResults.add(updated);
+          debugPrint('[deepSync] #$i saved groupId=${updated.groupId}');
+        } else {
+          _deepSyncResults.add(_groups[i]);
+          debugPrint('[deepSync] #$i no URL captured — skipped');
+        }
+        notifyListeners();
+
+        // ── 3f. Go back to groups list ────────────────────────────────
+        if (i < total - 1 && !_stopDeepSync) {
+          await _wvc!.executeScript('window.history.back();');
+          // Wait for groups list to reload
+          final backOk = await _waitForNavigation(
+              timeoutMs: 18000, extraMs: 2000);
+          if (!backOk) {
+            // history.back() failed — navigate directly
+            await _wvc!.loadUrl('https://www.facebook.com/groups/');
+            await _waitForNavigation(timeoutMs: 18000, extraMs: 2500);
+            // Restore __foundGroups after direct navigation
+            await _wvc!.executeScript(script);
+            await Future.delayed(const Duration(seconds: 3));
+          }
+        }
+      }
+
+      // ── Done ────────────────────────────────────────────────────────
+      _highlightedGroup = '';
+      if (_stopDeepSync) {
+        _setStatus(AutomationStatus.idle,
+            'Deep Sync stopped — ${_deepSyncResults.length}/$total done.');
+      } else {
+        _setStatus(AutomationStatus.success,
+            '✅ Deep Sync complete — ${_deepSyncResults.length} groups resolved.');
+      }
+      await _savePrefs();
+
+    } catch (e) {
+      debugPrint('[deepSync] error: $e');
+      _setStatus(AutomationStatus.error, '❌ Deep Sync error: $e');
+    } finally {
+      _isDeepSyncing    = false;
+      _highlightedGroup = '';
+      notifyListeners();
+    }
+  }
+
+  void stopDeepSync() {
+    _stopDeepSync = true;
+    _highlightedGroup = '';
+    _setStatus(AutomationStatus.idle, 'Deep Sync stopping…');
+    notifyListeners();
+  }
+
+  // ── _waitForNavigation ─────────────────────────────────────────────────
+  //
+  // Completer-based load waiter that resolves as soon as
+  // LoadingState.navigationCompleted fires on _wvc, then waits
+  // an additional [extraMs] for React hydration before resolving.
+  // Returns false on timeout or if _stopDeepSync is set.
+  //
+  Future<bool> _waitForNavigation({
+    int timeoutMs = 18000,
+    int extraMs   = 1500,
+  }) async {
+    final ctrl = _wvc;
+    if (ctrl == null) return false;
+
+    final completer = Completer<bool>();
+    StreamSubscription<LoadingState>? sub;
+
+    // Timeout guard
+    final timer = Future.delayed(Duration(milliseconds: timeoutMs), () {
+      if (!completer.isCompleted) completer.complete(false);
+    });
+
+    sub = ctrl.loadingState.listen((state) {
+      // Abort immediately if deep sync was stopped
+      if (_stopDeepSync && !completer.isCompleted) {
+        sub?.cancel();
+        completer.complete(false);
+        return;
+      }
+      if (state == LoadingState.navigationCompleted &&
+          !completer.isCompleted) {
+        sub?.cancel();
+        // Extra wait for React hydration / lazy-load
+        Future.delayed(Duration(milliseconds: extraMs), () {
+          if (!completer.isCompleted) {
+            completer.complete(!_stopDeepSync);
+          }
+        });
+      }
+    });
+
+    final result = await completer.future;
+    await sub.cancel();
+    // ignore: unawaited_futures — timer future is fire-and-forget
+    timer.ignore();
+    return result;
   }
 
   // ── Link Library: Add / Remove ─────────────────────────────────────────────
