@@ -193,6 +193,33 @@
         });
       });
 
+    // ── Patch history API to catch SPA navigations ──────────────────────────
+    // Facebook msite uses history.pushState() for client-side routing.
+    // WebView2's url stream only fires on real navigations, NOT pushState.
+    // We intercept pushState/replaceState and postMessage the new URL so
+    // Dart can catch it on _webMessageStream with the NAV_URL: prefix.
+    (function() {
+      if (window.__fbHistoryPatched) return;
+      window.__fbHistoryPatched = true;
+      function wrapHistory(method) {
+        var orig = history[method];
+        history[method] = function(state, title, url) {
+          var result = orig.apply(this, arguments);
+          try {
+            var fullUrl = url ? (url.startsWith('http') ? url : 'https://www.facebook.com' + url) : window.location.href;
+            postMsg('NAV_URL:' + fullUrl);
+          } catch(e) {}
+          return result;
+        };
+      }
+      wrapHistory('pushState');
+      wrapHistory('replaceState');
+      // Also catch popstate (back/forward)
+      window.addEventListener('popstate', function() {
+        try { postMsg('NAV_URL:' + window.location.href); } catch(e) {}
+      });
+    })();
+
     window.navigateToGroup = function(i) {
       var el = window.__foundGroups[i];
       if (!el) return false;
@@ -200,6 +227,13 @@
       ['mousedown','mouseup','click'].forEach(function(t) {
         el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}));
       });
+      // Also post current URL immediately after click as a fallback
+      setTimeout(function() {
+        try { postMsg('NAV_URL:' + window.location.href); } catch(e) {}
+      }, 800);
+      setTimeout(function() {
+        try { postMsg('NAV_URL:' + window.location.href); } catch(e) {}
+      }, 2500);
       return true;
     };
 

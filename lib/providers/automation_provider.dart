@@ -874,72 +874,44 @@ class AutomationProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── Deep Sync ──────────────────────────────────────────────────────────────
+
+  // ── _saveGroupsToDisk ─────────────────────────────────────────────────────
   //
-  // Phase 2 sync: after fetchGroups() gives us a list of groups with
-  // names but potentially missing URLs, deepSync clicks each group,
-  // WAITS for navigationCompleted, captures the real URL, then goes back
-  // and WAITS for the groups list to reload before moving to the next.
+  // Persists only the groups list immediately.
+  // Called inside the deepSync loop after every group is resolved so
+  // progress is never lost if the app is closed mid-sync.
   //
-  // Uses a Completer-based _waitForNavigation() helper rather than fixed
-  // delays so it adapts automatically to slow Sri Lankan connections.
+  Future<void> _saveGroupsToDisk() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _kGroups,
+      jsonEncode(_groups.map((g) => g.toJson()).toList()),
+    );
+  }
+
+  // ── deepSync ───────────────────────────────────────────────────────────────
   //
-  // ── Deep Sync ──────────────────────────────────────────────────────────────
+  // Strict sequential flow — one group fully resolved before the next starts.
   //
-  // Strategy: direct URL navigation only.
+  // Fix for "navigation never started":
+  //   The old _waitForGroupNavigation() subscribed to loadingState AFTER
+  //   navigateToGroup() was called.  Facebook's msite router fires
+  //   LoadingState.loading within ~20-80 ms of the click — well before
+  //   the subscription was registered.  The 5-second startTimeoutMs
+  //   therefore always expired without seeing the event.
   //
-  // window.navigateToGroup() is registered only while scraper JS is live.
-  // After fetchGroups() completes the page may have navigated away, so the
-  // function is gone.  Instead we use loadUrl() for every group that has a
-  // URL, or skip groups with no URL (index-only entries from the old scraper).
+  //   _beginGroupUrlWatch() registers its listener synchronously (zero
+  //   awaits before listen()) so it is ALWAYS live before the navigation
+  //   trigger runs — this is the key fix.
   //
-  // Flow per group:
-  //   loadUrl(group.url)
-  //   → _waitForNavigation()      wait for navigationCompleted
-  //   → _getFinalUrl()            capture resolved URL
-  //   → loadUrl(groups page)      go back via fresh navigation (reliable)
-  //   → _waitForNavigation()      wait for list page to reload
-  //
-  // ── Deep Sync v2 ───────────────────────────────────────────────────────────
-  //
-  // For each group (starting at index 1, skipping index 0 which is usually
-  // "Create a group" or a navigation item):
-  //
-  //   1. Navigate to facebook.com/groups/ if not already there.
-  //   2. Highlight the group row (JS border flash).
-  //   3. Click via navigateToGroup(index) — JS DOM click, triggers FB router.
-  //   4. Listen to _urlStream (address bar) to detect when URL changes to a
-  //      real /groups/<id> URL — more reliable than fixed delays.
-  //   5. Strip query params, extract groupId from path.
-  //   6. Save URL + groupId back to _groups[i].withUrl().
-  //   7. Navigate back to /groups/ and wait before the next group.
-  //
-  // ── Deep Sync ──────────────────────────────────────────────────────────────
-  //
-  // Simple, reliable approach:
-  //   1. Take every group that already has a URL from fetchGroups().
-  //   2. Navigate to it with loadUrl().
-  //   3. Wait for navigationCompleted.
-  //   4. Capture final URL from address bar (resolves redirects).
-  //   5. Extract groupId from path.
-  //   6. Save back to group list — live UI update.
-  //
-  // No JS DOM scanning. No click simulation. Just loadUrl().
-  //
-  // ── Deep Sync ──────────────────────────────────────────────────────────────
-  //
-  // Correct flow per user requirement:
-  //   1. Navigate to facebook.com/groups/ — same as Sync Groups does.
-  //   2. For each group row (by index from __foundGroups):
-  //      a. Scroll to the row so it's visible.
-  //      b. Find the first <a href="/groups/..."> anchor INSIDE that row.
-  //      c. Call anchor.click() — this is a real click on a real <a> tag,
-  //         which Facebook's msite router DOES handle correctly.
-  //      d. Listen to _urlStream — wait until address bar URL changes to
-  //         a /groups/<id> page (not the list root).
-  //      e. Save that URL + extract groupId.
-  //      f. Press browser Back (history.back()) to return to groups list.
-  //      g. Wait for groups list to reload, then do next group.
+  // Phase 2 per-group flow:
+  //   1. Register URL watcher     <- listener live on current microtask
+  //   2. Trigger navigation       <- loadUrl (primary) or click (fallback)
+  //   3. Await watcher            <- blocks until group URL or timeout
+  //   4. 2-second stabilise       <- inside watcher, handles FB redirects
+  //   5. Read window.location.href  <- final canonical URL from address bar
+  //   6. _extractGroupId() regex  <- numeric IDs and named slugs
+  //   7. _saveGroupsToDisk()      <- persist after every group
   //
   Future<void> deepSync() async {
     if (_wvc == null) {
@@ -962,26 +934,66 @@ class AutomationProvider extends ChangeNotifier {
     final total = _groups.length;
 
     try {
-      // ── Step 1: Go to groups page ──────────────────────────────────
+      // ── Phase 1: Load groups page + run scraper ──────────────────
       _setStatus(AutomationStatus.navigating,
-          '🔄 Deep Sync: opening groups page…');
+          '🔄 Deep Sync: loading groups page…');
       await _wvc!.loadUrl('https://www.facebook.com/groups/');
-      await _waitForNavigation(timeoutMs: 25000, extraMs: 3000);
+      await _waitForNavigation(timeoutMs: 28000, extraMs: 3000);
       if (_stopDeepSync) return;
 
-      // ── Step 2: Re-run scraper so __foundGroups is fresh ───────────
       _setStatus(AutomationStatus.running,
-          '🔄 Deep Sync: scanning group list…');
+          '🔄 Deep Sync: scanning groups (auto-scrolling)…');
+
       final script =
           await rootBundle.loadString('assets/scripts/fb_group_scraper.js');
+
+      final scraperDone = Completer<void>();
+      StreamSubscription<dynamic>? scraperSub;
+      Future.delayed(const Duration(minutes: 3), () {
+        if (!scraperDone.isCompleted) scraperDone.complete();
+      });
+      scraperSub = _webMessageStream?.listen((dynamic raw) {
+        final msg = raw?.toString() ?? '';
+        if (msg.startsWith('COUNT:')) {
+          final n = int.tryParse(
+                  msg.substring(6).trim().split(' ').first) ??
+              0;
+          _setStatus(AutomationStatus.running,
+              '🔄 Deep Sync: found $n groups so far…');
+          notifyListeners();
+        } else if (msg.startsWith('FINAL_DATA:')) {
+          _handleFinalData(msg.substring(11).trim());
+          scraperSub?.cancel();
+          if (!scraperDone.isCompleted) scraperDone.complete();
+        }
+      });
+
       await _wvc!.executeScript(script);
-      // Give scraper scroll loop time to complete (it auto-scrolls)
-      // We just need __foundGroups registered — wait for FINAL_DATA msg
-      // or just wait a bit for the initial registration
-      await Future.delayed(const Duration(seconds: 4));
+      await scraperDone.future;
+      await scraperSub?.cancel();
       if (_stopDeepSync) return;
 
-      // ── Step 3: Process each group ─────────────────────────────────
+      await Future.delayed(const Duration(milliseconds: 600));
+
+      final dynamic foundLen = await _wvc!
+          .executeScript('window.__foundGroups ? window.__foundGroups.length : -1');
+      debugPrint('[deepSync] Phase 1 complete. __foundGroups.length = $foundLen');
+
+      // ── Phase 2: Navigate each group — strictly one-by-one ───────
+      //
+      // ROOT CAUSE FIX:
+      //   Facebook msite uses history.pushState() for client-side routing.
+      //   WebView2's url stream ONLY fires on real navigations (loadUrl /
+      //   hard redirect).  A JS click that triggers pushState() is
+      //   completely invisible to the url stream — which is why every
+      //   previous approach got "navigation never started".
+      //
+      //   Fix: fb_group_scraper.js now patches history.pushState and
+      //   history.replaceState to call postMessage('NAV_URL:<url>').
+      //   For Strategy B (JS click) we listen on _webMessageStream.
+      //   For Strategy A (loadUrl) we use _urlStream as before since
+      //   a real navigation DOES fire it.
+      //
       for (int i = 0; i < total; i++) {
         if (_stopDeepSync) break;
 
@@ -989,149 +1001,128 @@ class AutomationProvider extends ChangeNotifier {
         _highlightedGroup = _groups[i].name;
         _setStatus(
           AutomationStatus.running,
-          '🔄 Deep Sync ${i + 1}/$total — ${_groups[i].name}',
+          '🔄 Processing ${i + 1}/$total — ${_groups[i].name}',
         );
         notifyListeners();
 
-        // ── 3a. Ensure we are on the groups list page ─────────────────
-        final curUrl = await _getFinalUrl() ?? '';
-        final onList = curUrl.contains('facebook.com/groups') &&
-            !RegExp(r'facebook\.com/groups/[^/?]+').hasMatch(curUrl);
-        if (!onList) {
-          await _wvc!.loadUrl('https://www.facebook.com/groups/');
-          await _waitForNavigation(timeoutMs: 20000, extraMs: 2500);
-          if (_stopDeepSync) break;
-          // Re-run scraper to restore __foundGroups
-          await _wvc!.executeScript(script);
-          await Future.delayed(const Duration(seconds: 3));
+        // ── Highlight row (best-effort) ────────────────────────────
+        try {
+          await _wvc!.executeScript(
+            '(function(){'
+            '  if (!window.__foundGroups) return;'
+            '  window.__foundGroups.forEach(function(el){'
+            '    el.style.outline=""; el.style.background="";'
+            '  });'
+            '  var el = window.__foundGroups[${_groups[i].index}];'
+            '  if (!el) return;'
+            '  el.scrollIntoView({behavior:"smooth",block:"center"});'
+            '  el.style.outline="3px solid #1877F2";'
+            '  el.style.background="rgba(24,119,242,0.12)";'
+            '})()',
+          );
+        } catch (e) {
+          debugPrint('[deepSync] highlight #$i failed: $e');
         }
-
-        // ── 3b. Scroll to group row + highlight ───────────────────────
-        final idx = _groups[i].index;
-        await _wvc!.executeScript(
-          '(function(){'
-          // Clear previous highlights
-          '  if(window.__foundGroups){'
-          '    window.__foundGroups.forEach(function(el){'
-          '      el.style.outline="";el.style.background="";'
-          '    });'
-          '  }'
-          // Highlight current row
-          '  var el=window.__foundGroups&&window.__foundGroups[$idx];'
-          '  if(el){'
-          '    el.scrollIntoView({behavior:"smooth",block:"center"});'
-          '    el.style.outline="3px solid #1877F2";'
-          '    el.style.background="rgba(24,119,242,0.12)";'
-          '  }'
-          '})();'
-        );
-        await Future.delayed(const Duration(milliseconds: 700));
+        await Future.delayed(const Duration(milliseconds: 500));
         if (_stopDeepSync) break;
 
-        // ── 3c. Click the anchor <a> tag inside the group row ─────────
-        // anchor.click() on actual <a href="/groups/xxx"> tag triggers
-        // Facebook's msite router correctly — unlike MouseEvent dispatch.
-        final dynamic clickResult = await _wvc!.executeScript(
-          '(function(){'
-          '  var el=window.__foundGroups&&window.__foundGroups[$idx];'
-          '  if(!el) return "no_element";'
-          '  var anchors=el.querySelectorAll("a[href]");'
-          '  for(var i=0;i<anchors.length;i++){'
-          '    var h=anchors[i].getAttribute("href")||"";'
-          '    if(h.indexOf("/groups/")!==-1){'
-          '      anchors[i].click();'
-          '      return "clicked:"+h;'
-          '    }'
-          '  }'
-          // Fallback: click the row element itself
-          '  el.click();'
-          '  return "row_clicked";'
-          '})();'
-        );
-        debugPrint('[deepSync] #$i click result: $clickResult');
+        final String existingUrl = _groups[i].url;
+        String resolvedUrl;
 
-        // ── 3d. Watch address bar for URL change ──────────────────────
-        // Resolve when URL becomes a specific group page
-        final urlCompleter = Completer<String>();
-        StreamSubscription<String>? urlSub;
+        if (existingUrl.isNotEmpty) {
+          // ── Strategy A: direct loadUrl ─────────────────────────
+          // WebView2 url stream fires for real navigations.
+          // ⚡ Watch BEFORE loadUrl — no await above this.
+          debugPrint('[deepSync] #$i Strategy A loadUrl — ${_groups[i].name}');
+          final urlWatch = _waitForNavUrl(
+            fallback: existingUrl,
+            context: '#$i',
+            useWebMessage: false,
+          );
+          await _wvc!.loadUrl(existingUrl);
+          resolvedUrl = await urlWatch;
 
-        // Timeout after 20s
-        final timer = Future.delayed(const Duration(seconds: 20), () {
-          if (!urlCompleter.isCompleted) urlCompleter.complete('');
-        });
-
-        urlSub = _urlStream?.listen((url) {
-          if (urlCompleter.isCompleted) return;
-          // URL must be a group page, not the list root
-          if (RegExp(r'facebook\.com/groups/[^/?#]+').hasMatch(url)) {
-            urlSub?.cancel();
-            urlCompleter.complete(url.split('?').first);
-          }
-        });
-
-        // Also wait for navigation to complete
-        _waitForNavigation(timeoutMs: 18000, extraMs: 500).then((_) {
-          if (!urlCompleter.isCompleted) {
-            _getFinalUrl().then((u) {
-              if (u != null &&
-                  RegExp(r'facebook\.com/groups/[^/?#]+').hasMatch(u) &&
-                  !urlCompleter.isCompleted) {
-                urlCompleter.complete(u.split('?').first);
-              }
-            });
-          }
-        });
-
-        final resolvedUrl = await urlCompleter.future;
-        await urlSub?.cancel();
-        timer.ignore();
-
-        if (_stopDeepSync) break;
-
-        debugPrint('[deepSync] #$i resolved: $resolvedUrl');
-
-        // ── 3e. Save URL + groupId ────────────────────────────────────
-        if (resolvedUrl.isNotEmpty) {
-          final updated = _groups[i].withUrl(resolvedUrl);
-          _groups[i] = updated;
-          _deepSyncResults.add(updated);
-          debugPrint('[deepSync] #$i saved groupId=${updated.groupId}');
         } else {
-          _deepSyncResults.add(_groups[i]);
-          debugPrint('[deepSync] #$i no URL captured — skipped');
+          // ── Strategy B: JS click → history.pushState → NAV_URL: msg
+          // ⚡ Watch BEFORE click — no await above this.
+          debugPrint('[deepSync] #$i Strategy B click — ${_groups[i].name}');
+          final urlWatch = _waitForNavUrl(
+            fallback: '',
+            context: '#$i',
+            useWebMessage: true,
+          );
+
+          bool navTriggered = false;
+          try {
+            final dynamic res = await _wvc!.executeScript(
+              'typeof window.navigateToGroup === "function"'
+              ' ? String(window.navigateToGroup(${_groups[i].index}))'
+              ' : "missing"',
+            );
+            final resStr = res?.toString() ?? '';
+            navTriggered = resStr.contains('true');
+            debugPrint('[deepSync] #$i navigateToGroup(${_groups[i].index}) → $resStr');
+          } catch (e) {
+            debugPrint('[deepSync] #$i JS click error: $e');
+          }
+
+          if (!navTriggered) {
+            debugPrint('[deepSync] #$i skipped — navigateToGroup unavailable');
+            _deepSyncResults.add(_groups[i]);
+            continue;
+          }
+          resolvedUrl = await urlWatch;
         }
+
+        if (_stopDeepSync) break;
+        debugPrint('[deepSync] #$i resolvedUrl="$resolvedUrl"');
+
+        // ── Extract groupId with regex ─────────────────────────────
+        final extractedId = _extractGroupId(resolvedUrl);
+        debugPrint('[deepSync] #$i extractedId="$extractedId"');
+
+        final updated = FBGroup(
+          name:     _groups[i].name,
+          index:    _groups[i].index,
+          imageUrl: _groups[i].imageUrl,
+          url:      resolvedUrl.isNotEmpty ? resolvedUrl : existingUrl,
+          groupId:  extractedId.isNotEmpty ? extractedId : _groups[i].groupId,
+        );
+
+        _groups[i] = updated;
+        _deepSyncResults.add(updated);
+
+        _setStatus(
+          AutomationStatus.running,
+          '💾 Saving: ${updated.name} (${i + 1}/$total)',
+        );
         notifyListeners();
 
-        // ── 3f. Go back to groups list ────────────────────────────────
-        if (i < total - 1 && !_stopDeepSync) {
-          await _wvc!.executeScript('window.history.back();');
-          // Wait for groups list to reload
-          final backOk = await _waitForNavigation(
-              timeoutMs: 18000, extraMs: 2000);
-          if (!backOk) {
-            // history.back() failed — navigate directly
-            await _wvc!.loadUrl('https://www.facebook.com/groups/');
-            await _waitForNavigation(timeoutMs: 18000, extraMs: 2500);
-            // Restore __foundGroups after direct navigation
-            await _wvc!.executeScript(script);
-            await Future.delayed(const Duration(seconds: 3));
-          }
-        }
+        await _saveGroupsToDisk();
+        debugPrint('[deepSync] #$i saved. url="${updated.url}" groupId="${updated.groupId}"');
       }
 
-      // ── Done ────────────────────────────────────────────────────────
+      // ── Clear highlights ────────────────────────────────────────────
+      try {
+        await _wvc!.executeScript(
+          'if(window.__foundGroups) window.__foundGroups.forEach('
+          'function(el){el.style.outline="";el.style.background="";});',
+        );
+      } catch (_) {}
+
       _highlightedGroup = '';
       if (_stopDeepSync) {
         _setStatus(AutomationStatus.idle,
-            'Deep Sync stopped — ${_deepSyncResults.length}/$total done.');
+            '⏹ Deep Sync stopped — '
+            '${_deepSyncResults.length}/$total saved.');
       } else {
         _setStatus(AutomationStatus.success,
-            '✅ Deep Sync complete — ${_deepSyncResults.length} groups resolved.');
+            '✅ Deep Sync complete — '
+            '${_deepSyncResults.length} groups resolved.');
       }
-      await _savePrefs();
 
-    } catch (e) {
-      debugPrint('[deepSync] error: $e');
+    } catch (e, stack) {
+      debugPrint('[deepSync] fatal error: $e\n$stack');
       _setStatus(AutomationStatus.error, '❌ Deep Sync error: $e');
     } finally {
       _isDeepSyncing    = false;
@@ -1147,13 +1138,179 @@ class AutomationProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── _waitForNavigation ─────────────────────────────────────────────────
+  // ── _waitForNavUrl ────────────────────────────────────────────────────────
   //
-  // Completer-based load waiter that resolves as soon as
-  // LoadingState.navigationCompleted fires on _wvc, then waits
-  // an additional [extraMs] for React hydration before resolving.
-  // Returns false on timeout or if _stopDeepSync is set.
+  // Unified URL watcher for deepSync.  Supports two modes:
   //
+  //   useWebMessage: false  (Strategy A — loadUrl)
+  //     Listens on _urlStream (WebView2 url stream).
+  //     WebView2 fires this stream for every real navigation (loadUrl,
+  //     HTTP redirect).  Works correctly for Strategy A.
+  //
+  //   useWebMessage: true   (Strategy B — JS click)
+  //     Listens on _webMessageStream for NAV_URL: messages.
+  //     Facebook uses history.pushState() for client-side routing after
+  //     a JS click — this is INVISIBLE to WebView2's url stream.
+  //     fb_group_scraper.js patches pushState/replaceState to call
+  //     window.chrome.webview.postMessage('NAV_URL:<url>') so we can
+  //     catch the SPA navigation here.
+  //
+  // ⚡ CRITICAL: This function has ZERO awaits before the listen() call.
+  //    Dart runs code before the first await synchronously on the current
+  //    microtask.  The caller does:
+  //      final watch = _waitForNavUrl(...);   // listener registered NOW
+  //      await _wvc.loadUrl(...);             // trigger AFTER
+  //      final url = await watch;             // catches the event
+  //    This eliminates the race condition entirely.
+  //
+  // After a valid URL is detected, waits 2 s for FB's redirect chain to
+  // settle, then reads window.location.href for the final canonical URL.
+  //
+  Future<String> _waitForNavUrl({
+    required String fallback,
+    String context        = '',
+    bool   useWebMessage  = false,
+    int    timeoutMs      = 22000,
+  }) {
+    final completer = Completer<String>();
+    StreamSubscription? sub;
+    Timer? timer;
+
+    void resolve(String url) {
+      if (completer.isCompleted) return;
+      sub?.cancel();
+      timer?.cancel();
+      completer.complete(url);
+    }
+
+    // Hard timeout guard.
+    timer = Timer(Duration(milliseconds: timeoutMs), () {
+      debugPrint('[waitForNavUrl][$context] timed out (${timeoutMs}ms) — fallback');
+      resolve(fallback);
+    });
+
+    // ⚡ NO await above this line.
+    if (useWebMessage) {
+      // Strategy B: listen for NAV_URL: messages from the patched pushState.
+      sub = _webMessageStream?.listen((dynamic raw) {
+        if (completer.isCompleted) return;
+        if (_stopDeepSync) { resolve(fallback); return; }
+
+        final msg = raw?.toString() ?? '';
+        if (!msg.startsWith('NAV_URL:')) return;
+
+        final url = msg.substring(8).trim();
+        if (!_isGroupDetailUrl(url)) return;
+
+        debugPrint('[waitForNavUrl][$context] NAV_URL detected: $url');
+        _stabiliseAndResolve(url, resolve, context, completer);
+      });
+    } else {
+      // Strategy A: listen on WebView2 url stream for real navigations.
+      sub = _urlStream?.listen((String url) {
+        if (completer.isCompleted) return;
+        if (_stopDeepSync) { resolve(fallback); return; }
+        if (!_isGroupDetailUrl(url)) return;
+
+        debugPrint('[waitForNavUrl][$context] urlStream detected: $url');
+        _stabiliseAndResolve(url, resolve, context, completer);
+      });
+    }
+
+    if (sub == null) {
+      debugPrint('[waitForNavUrl][$context] stream is null — fallback');
+      timer.cancel();
+      resolve(fallback);
+    }
+
+    return completer.future;
+  }
+
+  // ── _stabiliseAndResolve ──────────────────────────────────────────────────
+  //
+  // Called when a candidate group URL is first detected.  Waits 2 seconds
+  // for Facebook's redirect chain to settle (slug → numeric ID etc.), then
+  // reads window.location.href from the live WebView for the final URL.
+  //
+  void _stabiliseAndResolve(
+    String candidateUrl,
+    void Function(String) resolve,
+    String context,
+    Completer<String> completer,
+  ) {
+    Future.delayed(const Duration(seconds: 2), () async {
+      if (completer.isCompleted) return;
+      String finalUrl = candidateUrl.split('?').first;
+      try {
+        // Read the live address bar — catches any further redirect.
+        final dynamic raw =
+            await _wvc?.executeScript('window.location.href;');
+        if (raw != null) {
+          String href = raw.toString().trim();
+          // webview_windows double-JSON-encodes the return value.
+          if (href.startsWith('"') && href.endsWith('"')) {
+            href = jsonDecode(href) as String;
+          }
+          if (href.isNotEmpty &&
+              href != 'about:blank' &&
+              _isGroupDetailUrl(href)) {
+            finalUrl = href.split('?').first;
+            debugPrint('[waitForNavUrl][$context] stabilised: $finalUrl');
+          }
+        }
+      } catch (e) {
+        debugPrint('[waitForNavUrl][$context] href read error: $e');
+      }
+      resolve(finalUrl);
+    });
+  }
+
+  // ── _isGroupDetailUrl ──────────────────────────────────────────────────────
+  //
+  // Returns true only for URLs representing a real group detail page.
+  // Filters out the list root, feed, discover, and other noise paths.
+  //
+  static bool _isGroupDetailUrl(String url) {
+    if (!url.contains('/groups/')) return false;
+    if (RegExp(r'facebook\.com/groups/?\??(?:#.*)?$', caseSensitive: false)
+        .hasMatch(url)) {
+      return false;
+    }
+    const noiseSegments = {
+      'feed', 'discover', 'create', 'join', 'search',
+      'members', 'requests', 'videos', 'photos', 'events',
+      'files', 'about', 'announcements', 'topics',
+    };
+    final match =
+        RegExp(r'/groups/([^/?#]+)', caseSensitive: false).firstMatch(url);
+    final segment = match?.group(1) ?? '';
+    return segment.isNotEmpty &&
+        !noiseSegments.contains(segment.toLowerCase());
+  }
+
+  // ── _extractGroupId ────────────────────────────────────────────────────────
+  //
+  // Requirement 4: Regex-based group ID extraction.
+  //   Numeric: facebook.com/groups/123456789/   → '123456789'
+  //   Named:   facebook.com/groups/my-group/    → 'my-group'
+  //
+  static String _extractGroupId(String url) {
+    if (url.isEmpty) return '';
+    final match = RegExp(
+      r'facebook\.com/groups/([a-zA-Z0-9][a-zA-Z0-9._\-]*)',
+      caseSensitive: false,
+    ).firstMatch(url);
+    final id = match?.group(1) ?? '';
+    if (id.isEmpty) return '';
+    const noiseSegments = {
+      'feed', 'discover', 'create', 'join', 'search',
+      'members', 'requests', 'videos', 'photos', 'events',
+      'files', 'about', 'announcements', 'topics',
+    };
+    return noiseSegments.contains(id.toLowerCase()) ? '' : id;
+  }
+
+
   Future<bool> _waitForNavigation({
     int timeoutMs = 18000,
     int extraMs   = 1500,
