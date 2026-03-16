@@ -66,13 +66,35 @@ class FBItem {
   final String originalUrl;
   final String embedUrl;
   final DateTime savedAt;
+  // OG preview fields — populated after meta scrape
+  final String ogTitle;
+  final String ogDescription;
+  final String ogImage;
 
   FBItem({
     required this.id,
     required this.originalUrl,
     required this.embedUrl,
     required this.savedAt,
+    this.ogTitle       = '',
+    this.ogDescription = '',
+    this.ogImage       = '',
   });
+
+  /// Returns a copy with updated OG fields.
+  FBItem withMeta({
+    required String title,
+    required String description,
+    required String image,
+  }) => FBItem(
+    id:            id,
+    originalUrl:   originalUrl,
+    embedUrl:      embedUrl,
+    savedAt:       savedAt,
+    ogTitle:       title,
+    ogDescription: description,
+    ogImage:       image,
+  );
 
   static String buildEmbedUrl(String originalUrl) {
     var url = originalUrl.trim();
@@ -101,19 +123,25 @@ class FBItem {
       );
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'originalUrl': originalUrl,
-        'embedUrl': embedUrl,
-        'savedAt': savedAt.toIso8601String(),
+        'id':            id,
+        'originalUrl':   originalUrl,
+        'embedUrl':      embedUrl,
+        'savedAt':       savedAt.toIso8601String(),
+        'ogTitle':       ogTitle,
+        'ogDescription': ogDescription,
+        'ogImage':       ogImage,
       };
 
   factory FBItem.fromJson(Map<String, dynamic> j) {
     final orig = j['originalUrl'] as String? ?? '';
     return FBItem(
-      id: j['id'] as String? ?? DateTime.now().millisecondsSinceEpoch.toString(),
-      originalUrl: orig,
-      embedUrl: buildEmbedUrl(orig),
-      savedAt: DateTime.tryParse(j['savedAt'] as String? ?? '') ?? DateTime.now(),
+      id:            j['id']            as String? ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      originalUrl:   orig,
+      embedUrl:      buildEmbedUrl(orig),
+      savedAt:       DateTime.tryParse(j['savedAt'] as String? ?? '') ?? DateTime.now(),
+      ogTitle:       j['ogTitle']       as String? ?? '',
+      ogDescription: j['ogDescription'] as String? ?? '',
+      ogImage:       j['ogImage']       as String? ?? '',
     );
   }
 }
@@ -395,6 +423,7 @@ class AutomationProvider extends ChangeNotifier {
 
   Stream<String>?       _urlStream;
   Stream<LoadingState>? _loadingStream;
+  Stream<dynamic>?      _webMessageStream; // broadcast — reusable
   Stream<String>?       get urlStream     => _urlStream;
   Stream<LoadingState>? get loadingStream => _loadingStream;
 
@@ -434,9 +463,16 @@ class AutomationProvider extends ChangeNotifier {
   bool _groupsFetching = false;
   String? _groupsError;
 
+  // Sync progress state
+  bool _isSyncing   = false;
+  int  _groupsFound = 0;
+  StreamSubscription<dynamic>? _webMsgSub;
+
   List<FBGroup> get groups         => List.unmodifiable(_groups);
   bool          get groupsFetching => _groupsFetching;
   String?       get groupsError    => _groupsError;
+  bool          get isSyncing      => _isSyncing;
+  int           get groupsFound    => _groupsFound;
 
   // ── Prefs keys ─────────────────────────────────────────────────────────────
   static const _kUrl    = 'fb_post_url';
@@ -596,8 +632,9 @@ class AutomationProvider extends ChangeNotifier {
 })();
 ''');
 
-    _urlStream     = _wvc!.url.asBroadcastStream();
-    _loadingStream = _wvc!.loadingState.asBroadcastStream();
+    _urlStream        = _wvc!.url.asBroadcastStream();
+    _loadingStream    = _wvc!.loadingState.asBroadcastStream();
+    _webMessageStream = _wvc!.webMessage.asBroadcastStream();
 
     await _wvc!.loadUrl('https://www.facebook.com');
     _webViewReady = true;
@@ -673,126 +710,119 @@ class AutomationProvider extends ChangeNotifier {
       notifyListeners();
       return;
     }
+
+    await _webMsgSub?.cancel();
+    _webMsgSub = null;
+
     _groupsFetching = true;
+    _isSyncing      = true;
+    _groupsFound    = 0;
     _groupsError    = null;
     notifyListeners();
 
     try {
-      // ── Always navigate fresh to facebook.com/groups/ ──────────────────
-      //
-      // We always force a fresh navigation rather than reusing the current
-      // URL.  The screenshot confirms the page looks correct visually, which
-      // means the previous "already on groups" skip was masking a timing
-      // issue: the page was showing from a cached in-memory state that had
-      // not fully hydrated its <a> tags yet.  A fresh load is more reliable.
-      //
-      await _wvc!.loadUrl('https://www.facebook.com/groups/');
+      // Navigate to groups page — user can watch scroll in floating window
+      await _wvc!.loadUrl(
+          'https://www.facebook.com/groups/');
 
-      // Wait for navigationCompleted + 2 s initial paint buffer.
-      final loaded = await _waitForLoad(timeoutMs: 18000, extraMs: 2000);
+      final loaded = await _waitForLoad(timeoutMs: 25000, extraMs: 4000);
       if (!loaded) {
-        _groupsError = '⚠️ Groups page timed out. Check your internet connection.';
+        _groupsError = 'Groups page timed out. Check your internet.';
+        _isSyncing   = false;
+        _groupsFetching = false;
+        notifyListeners();
         return;
       }
 
-      // ── Dismiss "Open App" banner + scroll to hydrate lazy rows ──────────
-      //
-      // DevTools screenshot shows "Open App" button at bottom of the groups
-      // page blocking interactions.  Hide it first, then scroll to trigger
-      // IntersectionObserver lazy-loading of group row data attributes.
-      //
-      await _wvc!.executeScript(r'''
-(function(){
-  // Hide "Open app" bottom banner that overlays the groups list
-  var UPSELL = /open\s*app|install|use\s+mobile/i;
-  document.querySelectorAll(
-    '[data-testid="msite-open-app-banner"],[data-testid="open_app_banner"],.smartbanner,#smartbanner'
-  ).forEach(function(el){ el.style.setProperty('display','none','important'); });
-  document.querySelectorAll('div,a,button').forEach(function(el){
-    try {
-      var cs = window.getComputedStyle(el);
-      if (cs.position !== 'fixed' && cs.position !== 'sticky') return;
-      if (UPSELL.test(el.innerText||'')) el.style.setProperty('display','none','important');
-    } catch(_){}
-  });
-  // Scroll to force IntersectionObserver to hydrate group rows
-  window.scrollBy(0, 600);
-  setTimeout(function(){ window.scrollBy(0, 600); }, 500);
-  setTimeout(function(){ window.scrollTo(0, 0); }, 1200);
-})();
-''');
+      // Dismiss open-app banners
+      await _wvc!.executeScript(
+        '(function(){'
+        'var U=/open\\s*app|install|use\\s+mobile/i;'
+        'document.querySelectorAll("[data-testid=msite-open-app-banner],[data-testid=open_app_banner],.smartbanner,#smartbanner")'
+        '.forEach(function(el){el.style.setProperty("display","none","important");});'
+        'document.querySelectorAll("div,a,button").forEach(function(el){'
+        'try{var cs=window.getComputedStyle(el);'
+        'if(cs.position!=="fixed"&&cs.position!=="sticky")return;'
+        'if(U.test(el.innerText||""))el.style.setProperty("display","none","important");'
+        '}catch(_){}});'
+        '})();'
+      );
 
-      // Random delay (3–7 s): lets AJAX/React finish rendering group cards.
-      await randomDelay(minMs: 3000, maxMs: 7000);
+      // Listen for progress / final messages from JS scraper
+      _webMsgSub = _webMessageStream!.listen((dynamic raw) {
+        final msg = raw?.toString() ?? '';
+        debugPrint('[webMessage] $msg');
 
-      // ── Run scraper ────────────────────────────────────────────────────
-      //
-      // WebView2 JSON-encodes the script return value once before passing it
-      // through the Dart bridge.  Our script returns JSON.stringify(…) which
-      // is already a string, so we receive a double-encoded value.
-      // _decodeResult() strips both layers transparently.
-      //
+        if (msg.startsWith('COUNT:')) {
+          // COUNT message may contain DBG: suffix — extract just the number
+          final raw = msg.substring(6).trim();
+          final numStr = raw.contains(' ') ? raw.split(' ')[0] : raw;
+          final n = int.tryParse(numStr) ?? _groupsFound;
+          if (n != _groupsFound) {
+            _groupsFound = n;
+            notifyListeners();
+          }
+          // Log debug info if present
+          if (raw.contains('DBG:')) {
+            debugPrint('[Scraper DBG] ${raw.substring(raw.indexOf('DBG:'))}');
+          }
+        } else if (msg.startsWith('FINAL_DATA:')) {
+          _handleFinalData(msg.substring(11).trim());
+        }
+      });
+
+      // Inject scroll scraper from assets
       final script =
           await rootBundle.loadString('assets/scripts/fb_group_scraper.js');
+      await _wvc!.executeScript(script);
 
-      final String? rawResult =
-          await _wvc!.executeScript(script) as String?;
-
-      // ── Raw debug output ──────────────────────────────────────────────
-      // Printed to the Flutter debug console so the exact JSON string
-      // returned by the scraper (including any double-encoding wrapper)
-      // is visible in VS Code / Android Studio Output panel.
-      // Search for "JS Result:" in the console to find this line.
-      print('JS Result: $rawResult'); // ignore: avoid_print
-
-      if (rawResult == null || rawResult.trim().isEmpty) {
-        _groupsError =
-            '⚠️ Scraper returned no data. Wait for the page to fully load and try again.';
-        return;
-      }
-
-      final result = _decodeResult(rawResult);
-
-      // Log full diagnostic payload so the debug console shows exactly
-      // what the scraper found (totalAnchors, skippedCanon, etc.)
-      debugPrint('[fetchGroups] raw=$rawResult');
-      debugPrint('[fetchGroups] status=${result['status']}  '
-          'count=${(result['groups'] as List?)?.length ?? 0}  '
-          'debug=${result['debug']}');
-      // v4 extended debug: roleLinks, listItems, sampleHrefs
-      if (result['debug'] != null) {
-        debugPrint('[fetchGroups] v4-debug=${result['debug']}');
-      }
-
-      final st = result['status'] as String? ?? '';
-      if (st == 'success' || st == 'empty') {
-        final list = result['groups'] as List<dynamic>? ?? [];
-        _groups
-          ..clear()
-          ..addAll(list.map((e) => FBGroup.fromJson(
-              Map<String, dynamic>.from(e as Map))));
-
-        if (_groups.isEmpty) {
-          // Surface v6 diagnostic counts (mContainers, withTabindex, withImg)
-          final dbg         = result['debug'] as Map?;
-          final containers  = dbg?['mContainers']  ?? '?';
-          final withImg     = dbg?['withImg']       ?? '?';
-          _groupsError =
-              'No groups found ($containers MContainer rows, $withImg had images). '
-              'Make sure you are on facebook.com/groups/ and fully logged in.';
-        } else {
-          _groupsError = null;
+      // Safety timeout — 3 minutes
+      Future.delayed(const Duration(minutes: 3), () {
+        if (_isSyncing) {
+          _isSyncing      = false;
+          _groupsFetching = false;
+          if (_groupsError == null && _groups.isEmpty) {
+            _groupsError = 'Sync timed out. Please try again.';
+          }
+          notifyListeners();
         }
-        await _savePrefs();
-      } else {
-        _groupsError =
-            result['message'] as String? ?? 'Unknown scraper error.';
-      }
+      });
+
     } catch (e, stack) {
       debugPrint('[fetchGroups] error: $e\n$stack');
-      _groupsError = '⚠️ Failed to fetch groups: $e';
-    } finally {
+      _groupsError    = 'Failed to fetch groups: $e';
+      _isSyncing      = false;
       _groupsFetching = false;
+      notifyListeners();
+    }
+  }
+
+  void _handleFinalData(String jsonStr) {
+    try {
+      final decoded = jsonDecode(jsonStr);
+      List<dynamic> list = [];
+      if (decoded is List) {
+        list = decoded;
+      } else if (decoded is Map) {
+        list = (decoded['groups'] as List<dynamic>?) ?? [];
+      }
+      _groups
+        ..clear()
+        ..addAll(list.map((e) =>
+            FBGroup.fromJson(Map<String, dynamic>.from(e as Map))));
+      _groupsFound = _groups.length;
+      _groupsError = _groups.isEmpty
+          ? 'No groups found after full scroll. Make sure you are logged in.'
+          : null;
+      _savePrefs();
+    } catch (e) {
+      debugPrint('[_handleFinalData] parse error: $e');
+      _groupsError = 'Failed to parse group data: $e';
+    } finally {
+      _isSyncing      = false;
+      _groupsFetching = false;
+      _webMsgSub?.cancel();
+      _webMsgSub = null;
       notifyListeners();
     }
   }
@@ -806,17 +836,23 @@ class AutomationProvider extends ChangeNotifier {
 
   // ── Link Library: Add / Remove ─────────────────────────────────────────────
 
-  Future<void> addItem(String url) async {
+  // addItem: URL + optional manual title/description — no scraping needed.
+  Future<void> addItem(String url, {String manualTitle = '', String manualDesc = ''}) async {
     final trimmed = url.trim();
     if (trimmed.isEmpty) return;
-    await WebEnvironmentManager.instance.ensureDesktopEnv();
-    final item = FBItem.fromUrl(trimmed);
+
+    var item = FBItem.fromUrl(trimmed);
+
+    // Apply manual meta immediately if provided
+    if (manualTitle.isNotEmpty || manualDesc.isNotEmpty) {
+      item = item.withMeta(
+        title:       manualTitle.trim(),
+        description: manualDesc.trim(),
+        image:       '',
+      );
+    }
+
     _items.insert(0, item);
-    notifyListeners();
-    final ctrl = EmbedCardController(item.embedUrl);
-    _embedControllers[item.id] = ctrl;
-    ctrl.addListener(notifyListeners);
-    await ctrl.init();
     await _savePrefs();
     notifyListeners();
   }
@@ -1029,6 +1065,7 @@ class AutomationProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _webMsgSub?.cancel();
     _wvc?.dispose();
     for (final ctrl in _embedControllers.values) {
       ctrl.removeListener(notifyListeners);

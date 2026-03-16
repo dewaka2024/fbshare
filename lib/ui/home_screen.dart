@@ -4,8 +4,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:webview_windows/webview_windows.dart';
 import '../providers/automation_provider.dart';
+import 'floating_webview_window.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Design tokens
@@ -28,13 +28,27 @@ const _divider = Color(0xFF1C2030);
 // ─────────────────────────────────────────────────────────────────────────────
 // Root scaffold
 // ─────────────────────────────────────────────────────────────────────────────
-class HomeScreen extends StatefulWidget {
+// ─────────────────────────────────────────────────────────────────────────────
+// HomeScreen — thin shell kept for backwards compat, delegates to MainScreen
+// ─────────────────────────────────────────────────────────────────────────────
+class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  Widget build(BuildContext context) => const MainScreen();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+// ─────────────────────────────────────────────────────────────────────────────
+// MainScreen — Navigation Rail + page switcher
+// ─────────────────────────────────────────────────────────────────────────────
+class MainScreen extends StatefulWidget {
+  const MainScreen({super.key});
+  @override
+  State<MainScreen> createState() => _MainScreenState();
+}
+
+class _MainScreenState extends State<MainScreen> {
+  int _selectedIndex = 0;
+
   @override
   void initState() {
     super.initState();
@@ -45,167 +59,1036 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    return Scaffold(
       backgroundColor: _bg,
-      body: Row(
+      body: Stack(
         children: [
-          _ControlPanel(),
-          _LibraryPanel(),
-          Expanded(child: _WebViewPanel()),
+          Row(
+            children: [
+              // ── Left Navigation Rail ─────────────────────────────────────
+              _AppNavRail(
+                selectedIndex: _selectedIndex,
+                onDestinationSelected: (i) =>
+                    setState(() => _selectedIndex = i),
+              ),
+              // ── Right content area ───────────────────────────────────────
+              Expanded(
+                child: IndexedStack(
+                  index: _selectedIndex,
+                  children: const [
+                    _AutomationPage(),
+                    _FollowUpPage(),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          // Floating WebView overlay (always on top)
+          const FloatingWebViewWindow(),
         ],
       ),
     );
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// LEFT — Control panel with tabs
-// ═════════════════════════════════════════════════════════════════════════════
-class _ControlPanel extends StatelessWidget {
-  const _ControlPanel();
+// ─────────────────────────────────────────────────────────────────────────────
+// Navigation Rail
+// ─────────────────────────────────────────────────────────────────────────────
+class _AppNavRail extends StatelessWidget {
+  final int selectedIndex;
+  final ValueChanged<int> onDestinationSelected;
+  const _AppNavRail({
+    required this.selectedIndex,
+    required this.onDestinationSelected,
+  });
+
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2,
-      child: Container(
-        width: 300,
-        decoration: const BoxDecoration(
-          color: _surface,
-          border: Border(right: BorderSide(color: _divider)),
-        ),
-        child: const Column(
-          children: [
-            _AppHeader(),
-            _ControlTabBar(),
-            Expanded(child: _ControlTabBody()),
-            _UrlFooter(),
-          ],
+    final prov = context.watch<AutomationProvider>();
+
+    return Container(
+      width: 72,
+      decoration: const BoxDecoration(
+        color: _surface,
+        border: Border(right: BorderSide(color: _divider)),
+      ),
+      child: Column(
+        children: [
+          // ── App logo ──────────────────────────────────────────────────────
+          const SizedBox(height: 16),
+          Container(
+            width: 36, height: 36,
+            decoration: BoxDecoration(
+              color: _accent,
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: const [
+                BoxShadow(
+                    color: Color(0x441877F2), blurRadius: 12,
+                    offset: Offset(0, 3)),
+              ],
+            ),
+            child: const Center(
+              child: Text('f',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      height: 1)),
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Divider(color: _divider, height: 1, indent: 12, endIndent: 12),
+          const SizedBox(height: 8),
+
+          // ── Nav destinations ──────────────────────────────────────────────
+          _NavItem(
+            icon: Icons.smart_toy_rounded,
+            label: 'Automation',
+            selected: selectedIndex == 0,
+            onTap: () => onDestinationSelected(0),
+            badgeCount: prov.groups.length,
+          ),
+          const SizedBox(height: 4),
+          _NavItem(
+            icon: Icons.person_add_rounded,
+            label: 'Follow-up',
+            selected: selectedIndex == 1,
+            onTap: () => onDestinationSelected(1),
+          ),
+
+          const Spacer(),
+          const Divider(color: _divider, height: 1, indent: 12, endIndent: 12),
+          const SizedBox(height: 12),
+
+          // ── Status dot ───────────────────────────────────────────────────
+          Tooltip(
+            message: prov.webViewReady ? 'WebView ready' : 'Initialising…',
+            child: Container(
+              width: 7, height: 7,
+              decoration: BoxDecoration(
+                color: prov.webViewReady ? _green : _sub,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                      color: (prov.webViewReady ? _green : _sub)
+                          .withValues(alpha: .5),
+                      blurRadius: 6,
+                      spreadRadius: 1),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // ── Profile avatar placeholder ────────────────────────────────────
+          Tooltip(
+            message: 'Profile',
+            child: Container(
+              width: 36, height: 36,
+              margin: const EdgeInsets.only(bottom: 14),
+              decoration: BoxDecoration(
+                color: _card,
+                shape: BoxShape.circle,
+                border: Border.all(color: _border, width: 1.5),
+              ),
+              child: const Icon(Icons.person_rounded, color: _sub, size: 18),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Single nav rail item ───────────────────────────────────────────────────────
+class _NavItem extends StatefulWidget {
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final int badgeCount;
+  const _NavItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.badgeCount = 0,
+  });
+  @override
+  State<_NavItem> createState() => _NavItemState();
+}
+
+class _NavItemState extends State<_NavItem> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = widget.selected;
+    final color  = active ? _accent : (_hovered ? _subL : _sub);
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit:  (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          width: 56,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: active
+                ? _accent.withValues(alpha: .12)
+                : _hovered
+                    ? _card.withValues(alpha: .6)
+                    : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            border: active
+                ? Border.all(color: _accent.withValues(alpha: .25))
+                : null,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(widget.icon, color: color, size: 22),
+                  if (widget.badgeCount > 0)
+                    Positioned(
+                      top: -4, right: -6,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 4, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: _accent,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          widget.badgeCount > 99
+                              ? '99+'
+                              : '${widget.badgeCount}',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 7.5,
+                              fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                widget.label,
+                style: TextStyle(
+                    color: color,
+                    fontSize: 8.5,
+                    fontWeight: active
+                        ? FontWeight.w700
+                        : FontWeight.w500),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _AppHeader extends StatelessWidget {
-  const _AppHeader();
+// ─────────────────────────────────────────────────────────────────────────────
+// Automation Page  (index 0)
+// Three-column: Control | Groups List | Library
+// ─────────────────────────────────────────────────────────────────────────────
+class _AutomationPage extends StatefulWidget {
+  const _AutomationPage();
+  @override
+  State<_AutomationPage> createState() => _AutomationPageState();
+}
+
+class _AutomationPageState extends State<_AutomationPage> {
+  final _postLinkCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _postLinkCtrl.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final ready = context.watch<AutomationProvider>().webViewReady;
+    final prov = context.watch<AutomationProvider>();
+
+    return Column(
+      children: [
+        // ── Header bar ─────────────────────────────────────────────────────
+        _PageHeader(prov: prov),
+
+        // ── Body: groups list + library sidebar ────────────────────────────
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Left column: groups list
+              Expanded(child: _GroupsListColumn(prov: prov)),
+              // Right sidebar: saved posts library
+              const SizedBox(
+                width: 400,
+                child: _LibraryPanel(),
+              ),
+            ],
+          ),
+        ),
+
+        // ── Footer: post link + start sharing ──────────────────────────────
+        _PageFooter(prov: prov, postLinkCtrl: _postLinkCtrl),
+      ],
+    );
+  }
+}
+
+// ── Header bar ────────────────────────────────────────────────────────────────
+class _PageHeader extends StatelessWidget {
+  final AutomationProvider prov;
+  const _PageHeader({required this.prov});
+
+  Color get _statusColor {
+    switch (prov.status) {
+      case AutomationStatus.success:   return _green;
+      case AutomationStatus.error:     return _red;
+      case AutomationStatus.running:
+      case AutomationStatus.navigating: return _amber;
+      default: return _sub;
+    }
+  }
+
+  String get _statusLabel {
+    switch (prov.status) {
+      case AutomationStatus.success:    return 'Success';
+      case AutomationStatus.error:      return 'Error';
+      case AutomationStatus.running:    return 'Running…';
+      case AutomationStatus.navigating: return 'Navigating…';
+      default: return 'Ready';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 13),
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
       decoration: const BoxDecoration(
-        color: _card,
+        color: _surface,
         border: Border(bottom: BorderSide(color: _divider)),
       ),
       child: Row(
         children: [
-          _FbBadge(),
-          const SizedBox(width: 11),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          // Page title
+          const Text('Automation',
+              style: TextStyle(
+                  color: _text,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700)),
+          const SizedBox(width: 8),
+          const Text('Groups & Sharing',
+              style: TextStyle(color: _sub, fontSize: 11)),
+
+          const Spacer(),
+
+          // Status chip
+          Container(
+            padding: const EdgeInsets.symmetric(
+                horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: _statusColor.withValues(alpha: .1),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                  color: _statusColor.withValues(alpha: .3)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Text('FB Share Automation',
-                    style: TextStyle(color: _text, fontSize: 12.5, fontWeight: FontWeight.w700)),
-                SizedBox(height: 1),
-                Text('Windows Desktop — v4.0',
-                    style: TextStyle(color: _sub, fontSize: 9.5)),
+                Container(
+                  width: 6, height: 6,
+                  decoration: BoxDecoration(
+                    color: _statusColor,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                          color: _statusColor.withValues(alpha: .5),
+                          blurRadius: 4),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'Status: $_statusLabel',
+                  style: TextStyle(
+                      color: _statusColor,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600),
+                ),
               ],
             ),
           ),
-          _ReadyDot(ready: ready),
+          const SizedBox(width: 12),
+
+          // Sync Groups button
+          ElevatedButton.icon(
+            onPressed: prov.webViewReady && !prov.isSyncing
+                ? () => prov.fetchGroups()
+                : null,
+            icon: prov.isSyncing
+                ? const SizedBox(
+                    width: 13, height: 13,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 1.8, color: Colors.white))
+                : const Icon(Icons.sync_rounded, size: 15),
+            label: Text(prov.isSyncing
+                ? 'Syncing… (${prov.groupsFound})'
+                : 'Sync Groups'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _accent,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 16, vertical: 10),
+              textStyle: const TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w600),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(9)),
+              elevation: 0,
+            ),
+          ),
+          const SizedBox(width: 10),
+
+          // Control panel toggle — compact icon button
+          Tooltip(
+            message: 'Automation settings',
+            child: _IconBtn(
+              icon: Icons.tune_rounded,
+              onTap: () => _showAutomationSettings(context, prov),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAutomationSettings(
+      BuildContext context, AutomationProvider prov) {
+    showDialog(
+      context: context,
+      builder: (_) => _AutomationSettingsDialog(prov: prov),
+    );
+  }
+}
+
+// ── Groups list column (middle of automation page) ─────────────────────────────
+class _GroupsListColumn extends StatelessWidget {
+  final AutomationProvider prov;
+  const _GroupsListColumn({required this.prov});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: _bg,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Sub-header
+          if (prov.isSyncing) _SyncProgressBanner(groupsFound: prov.groupsFound),
+          if (prov.groupsError != null && !prov.isSyncing)
+            _ErrorBanner(message: prov.groupsError!),
+
+          // Group count label
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+            child: Row(
+              children: [
+                const Icon(Icons.group_rounded, color: _sub, size: 13),
+                const SizedBox(width: 6),
+                Text(
+                  prov.groups.isEmpty
+                      ? 'No groups loaded'
+                      : '${prov.groups.length} groups',
+                  style: const TextStyle(
+                      color: _sub,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.3),
+                ),
+                if (prov.groups.isNotEmpty) ...[
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: prov.clearGroups,
+                    child: const Text('Clear',
+                        style: TextStyle(
+                            color: _sub,
+                            fontSize: 9.5,
+                            decoration: TextDecoration.underline)),
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          // Groups list
+          Expanded(
+            child: prov.groups.isEmpty
+                ? _GroupsEmptyState(prov: prov)
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(10, 0, 10, 80),
+                    itemCount: prov.groups.length,
+                    itemBuilder: (_, i) {
+                      final g = prov.groups[i];
+                      return _GroupRowCard(
+                        group: g,
+                        onTap: () => prov.navigateToGroup(g),
+                      );
+                    },
+                  ),
+          ),
         ],
       ),
     );
   }
 }
 
-class _FbBadge extends StatelessWidget {
+// ── Group row card ─────────────────────────────────────────────────────────────
+class _GroupRowCard extends StatefulWidget {
+  final FBGroup group;
+  final VoidCallback onTap;
+  const _GroupRowCard({required this.group, required this.onTap});
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 34, height: 34,
-      decoration: BoxDecoration(
-        color: _accent,
-        borderRadius: BorderRadius.circular(9),
-        boxShadow: const [BoxShadow(color: Color(0x441877F2), blurRadius: 10, offset: Offset(0, 3))],
-      ),
-      child: const Center(
-        child: Text('f', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w900, height: 1)),
-      ),
-    );
-  }
+  State<_GroupRowCard> createState() => _GroupRowCardState();
 }
 
-class _ReadyDot extends StatelessWidget {
-  final bool ready;
-  const _ReadyDot({required this.ready});
+class _GroupRowCardState extends State<_GroupRowCard> {
+  bool _hovered = false;
+
   @override
   Widget build(BuildContext context) {
-    final color = ready ? _green : _sub;
-    return Tooltip(
-      message: ready ? 'WebView ready' : 'Initialising…',
-      child: Container(
-        width: 7, height: 7,
-        decoration: BoxDecoration(
-          color: color, shape: BoxShape.circle,
-          boxShadow: [BoxShadow(color: color.withValues(alpha: .5), blurRadius: 6, spreadRadius: 1)],
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit:  (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          margin: const EdgeInsets.only(bottom: 6),
+          padding: const EdgeInsets.symmetric(
+              horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: _hovered ? const Color(0xFF1F2433) : _card,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: _hovered
+                  ? _accent.withValues(alpha: .3)
+                  : _border,
+              width: _hovered ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              // Leading: CircleAvatar
+              _GroupCircleAvatar(imageUrl: widget.group.imageUrl),
+              const SizedBox(width: 12),
+              // Title + subtitle
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.group.name,
+                      style: TextStyle(
+                          color: _hovered ? _accentL : _text,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      widget.group.url.isNotEmpty
+                          ? widget.group.url
+                          : 'Index #${widget.group.index}',
+                      style: const TextStyle(
+                          color: _sub, fontSize: 10),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              // Trailing: checkmark
+              AnimatedOpacity(
+                opacity: _hovered ? 1 : 0.35,
+                duration: const Duration(milliseconds: 120),
+                child: Icon(
+                  Icons.check_circle_rounded,
+                  size: 16,
+                  color: _hovered ? _green : _sub,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _ControlTabBar extends StatelessWidget {
-  const _ControlTabBar();
+// ── Group circle avatar ────────────────────────────────────────────────────────
+class _GroupCircleAvatar extends StatelessWidget {
+  final String imageUrl;
+  const _GroupCircleAvatar({required this.imageUrl});
+
+  @override
+  Widget build(BuildContext context) {
+    const double r = 20;
+    if (imageUrl.isEmpty) {
+      return CircleAvatar(
+        radius: r,
+        backgroundColor: _accent.withValues(alpha: .12),
+        child: const Icon(Icons.group_rounded, color: _accentL, size: 18),
+      );
+    }
+    return CircleAvatar(
+      radius: r,
+      backgroundColor: _border,
+      backgroundImage: NetworkImage(imageUrl),
+      onBackgroundImageError: (_, __) {},
+    );
+  }
+}
+
+// ── Footer: post link + start sharing ─────────────────────────────────────────
+class _PageFooter extends StatelessWidget {
+  final AutomationProvider prov;
+  final TextEditingController postLinkCtrl;
+  const _PageFooter({required this.prov, required this.postLinkCtrl});
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: _card,
-      child: const TabBar(
-        labelColor: _accent,
-        unselectedLabelColor: _sub,
-        indicatorColor: _accent,
-        indicatorWeight: 2,
-        labelStyle: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.6),
-        unselectedLabelStyle: TextStyle(fontSize: 10, fontWeight: FontWeight.w500),
-        tabs: [
-          Tab(icon: Icon(Icons.layers_rounded, size: 14), text: 'PAGE MANAGER', iconMargin: EdgeInsets.only(bottom: 2)),
-          Tab(icon: Icon(Icons.play_circle_rounded, size: 14), text: 'AUTOMATION', iconMargin: EdgeInsets.only(bottom: 2)),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+      decoration: const BoxDecoration(
+        color: _surface,
+        border: Border(top: BorderSide(color: _divider)),
+      ),
+      child: Row(
+        children: [
+          // Post link field
+          Expanded(
+            child: TextField(
+              controller: postLinkCtrl,
+              style: const TextStyle(color: _text, fontSize: 12),
+              onSubmitted: (v) {
+                prov.setPostUrl(v);
+                prov.startAutomation();
+              },
+              decoration: InputDecoration(
+                hintText: 'Paste Facebook post link to share…',
+                hintStyle:
+                    const TextStyle(color: _sub, fontSize: 11),
+                prefixIcon: const Icon(Icons.link_rounded,
+                    color: _sub, size: 16),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.content_paste_rounded,
+                      color: _sub, size: 14),
+                  onPressed: () async {
+                    final d =
+                        await Clipboard.getData('text/plain');
+                    if (d?.text != null) {
+                      postLinkCtrl.text = d!.text!;
+                    }
+                  },
+                ),
+                filled: true,
+                fillColor: _card,
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 11),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(9),
+                    borderSide:
+                        const BorderSide(color: _border)),
+                enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(9),
+                    borderSide:
+                        const BorderSide(color: _border)),
+                focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(9),
+                    borderSide: const BorderSide(
+                        color: _accent, width: 1.5)),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+
+          // Navigate button
+          _IconBtn(
+            icon: Icons.open_in_browser_rounded,
+            tooltip: 'Navigate to post',
+            onTap: prov.webViewReady
+                ? () {
+                    prov.setPostUrl(postLinkCtrl.text);
+                    prov.navigateToPost();
+                  }
+                : null,
+          ),
+          const SizedBox(width: 8),
+
+          // Start Sharing button
+          ElevatedButton.icon(
+            onPressed:
+                prov.webViewReady && !prov.isRunning && prov.groups.isNotEmpty
+                    ? () {
+                        prov.setPostUrl(postLinkCtrl.text);
+                        prov.startAutomation();
+                      }
+                    : null,
+            icon: prov.isRunning
+                ? const SizedBox(
+                    width: 13, height: 13,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 1.8, color: Colors.white))
+                : const Icon(Icons.play_arrow_rounded, size: 16),
+            label: Text(
+                prov.isRunning ? 'Running…' : 'Start Sharing'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _green,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: _card,
+              disabledForegroundColor: _sub,
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 18, vertical: 11),
+              textStyle: const TextStyle(
+                  fontSize: 12.5, fontWeight: FontWeight.w700),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(9)),
+              elevation: 0,
+            ),
+          ),
+
+          // Stop button (only when running)
+          if (prov.isRunning) ...[
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              onPressed: prov.stopAutomation,
+              icon: const Icon(Icons.stop_rounded, size: 15),
+              label: const Text('Stop'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _red,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 11),
+                textStyle: const TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(9)),
+                elevation: 0,
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
 }
 
-class _ControlTabBody extends StatelessWidget {
-  const _ControlTabBody();
+// ── Automation settings dialog ─────────────────────────────────────────────────
+class _AutomationSettingsDialog extends StatefulWidget {
+  final AutomationProvider prov;
+  const _AutomationSettingsDialog({required this.prov});
+  @override
+  State<_AutomationSettingsDialog> createState() =>
+      _AutomationSettingsDialogState();
+}
+
+class _AutomationSettingsDialogState
+    extends State<_AutomationSettingsDialog> {
+  late final TextEditingController _urlCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _urlCtrl = TextEditingController(text: widget.prov.postUrl);
+  }
+
+  @override
+  void dispose() {
+    _urlCtrl.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return const TabBarView(children: [_PageManagerTab(), _AutomationTab()]);
+    return Dialog(
+      backgroundColor: _surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14)),
+      child: SizedBox(
+        width: 460,
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Automation Settings',
+                  style: TextStyle(
+                      color: _text,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700)),
+              const SizedBox(height: 18),
+              const Text('Post URL to share',
+                  style: TextStyle(
+                      color: _sub,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8)),
+              const SizedBox(height: 7),
+              _ThemedTextField(
+                controller: _urlCtrl,
+                hint: 'https://www.facebook.com/share/p/…',
+                prefixIcon: Icons.link_rounded,
+                showPaste: true,
+              ),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancel',
+                        style: TextStyle(color: _sub)),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () {
+                      widget.prov.setPostUrl(_urlCtrl.text);
+                      Navigator.pop(context);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _accent,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                      elevation: 0,
+                    ),
+                    child: const Text('Save'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
-class _UrlFooter extends StatelessWidget {
-  const _UrlFooter();
+// ── Empty state ────────────────────────────────────────────────────────────────
+class _GroupsEmptyState extends StatelessWidget {
+  final AutomationProvider prov;
+  const _GroupsEmptyState({required this.prov});
+
   @override
   Widget build(BuildContext context) {
-    final prov = context.watch<AutomationProvider>();
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 72, height: 72,
+            decoration: BoxDecoration(
+              color: _accent.withValues(alpha: .07),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.group_outlined,
+                color: _accentL, size: 32),
+          ),
+          const SizedBox(height: 18),
+          const Text('No groups loaded',
+              style: TextStyle(
+                  color: _text,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          const Text(
+            'Log in to Facebook in the WebView,\n'
+            'then tap Sync Groups to load all your groups.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+                color: _sub, fontSize: 12, height: 1.65),
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            onPressed: prov.webViewReady && !prov.isSyncing
+                ? () => prov.fetchGroups()
+                : null,
+            icon: const Icon(Icons.sync_rounded, size: 15),
+            label: const Text('Sync Groups'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _accent,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(9)),
+              elevation: 0,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Error banner ───────────────────────────────────────────────────────────────
+class _ErrorBanner extends StatelessWidget {
+  final String message;
+  const _ErrorBanner({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 7, 12, 9),
-      decoration: const BoxDecoration(border: Border(top: BorderSide(color: _divider))),
-      child: StreamBuilder<String>(
-        stream: prov.urlStream,
-        builder: (_, snap) {
-          final url = snap.data ?? 'https://www.facebook.com';
-          return Row(
-            children: [
-              const Icon(Icons.language_rounded, color: _sub, size: 10),
-              const SizedBox(width: 5),
-              Expanded(child: Text(url, style: const TextStyle(color: _sub, fontSize: 9.5), overflow: TextOverflow.ellipsis)),
-            ],
-          );
-        },
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: _red.withValues(alpha: .08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _red.withValues(alpha: .25)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline_rounded,
+              color: _red, size: 14),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Text(message,
+                  style: const TextStyle(
+                      color: _red, fontSize: 10.5, height: 1.4))),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Small icon button ──────────────────────────────────────────────────────────
+class _IconBtn extends StatelessWidget {
+  final IconData icon;
+  final String? tooltip;
+  final VoidCallback? onTap;
+  const _IconBtn({required this.icon, this.tooltip, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip ?? '',
+      child: Material(
+        color: _card,
+        borderRadius: BorderRadius.circular(9),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(9),
+          onTap: onTap,
+          child: Container(
+            width: 38, height: 38,
+            alignment: Alignment.center,
+            child: Icon(icon,
+                size: 16,
+                color: onTap != null ? _subL : _sub),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Follow-up Page  (index 1) — Coming Soon placeholder
+// ─────────────────────────────────────────────────────────────────────────────
+class _FollowUpPage extends StatelessWidget {
+  const _FollowUpPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: _bg,
+      child: Column(
+        children: [
+          // Header
+          Container(
+            height: 56,
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            decoration: const BoxDecoration(
+              color: _surface,
+              border: Border(bottom: BorderSide(color: _divider)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.person_add_rounded,
+                    color: _accentL, size: 18),
+                SizedBox(width: 10),
+                Text('Follow-up',
+                    style: TextStyle(
+                        color: _text,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700)),
+                SizedBox(width: 8),
+                Text('Audience Management',
+                    style: TextStyle(color: _sub, fontSize: 11)),
+              ],
+            ),
+          ),
+          // Coming soon body
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 80, height: 80,
+                    decoration: BoxDecoration(
+                      color: _accent.withValues(alpha: .07),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.person_add_rounded,
+                        color: _accentL, size: 36),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text('Coming Soon',
+                      style: TextStyle(
+                          color: _text,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Follow-up automation and\naudience management tools\nare under development.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        color: _sub, fontSize: 13, height: 1.7),
+                  ),
+                  const SizedBox(height: 28),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _accent.withValues(alpha: .1),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                          color: _accent.withValues(alpha: .25)),
+                    ),
+                    child: const Text('v5.0 — Planned',
+                        style: TextStyle(
+                            color: _accentL,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -281,7 +1164,18 @@ class _PageManagerTabState extends State<_PageManagerTab> {
         const Divider(color: _divider, height: 1, indent: 12, endIndent: 12),
         Expanded(
           child: prov.pages.isEmpty
-              ? const _EmptyHint(icon: Icons.web_asset_rounded, message: 'No pages yet.\nPaste a Facebook URL above.')
+              ? const Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.web_asset_rounded, color: _border, size: 32),
+                      SizedBox(height: 10),
+                      Text('No pages yet.\nPaste a Facebook URL above.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: _sub, fontSize: 11.5, height: 1.6)),
+                    ],
+                  ),
+                )
               : ListView.builder(
                   padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 9),
                   itemCount: prov.pages.length,
@@ -390,236 +1284,6 @@ class _AvatarFallback extends StatelessWidget {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// TAB 2 — AUTOMATION
-// ═════════════════════════════════════════════════════════════════════════════
-class _AutomationTab extends StatefulWidget {
-  const _AutomationTab();
-  @override
-  State<_AutomationTab> createState() => _AutomationTabState();
-}
-
-class _AutomationTabState extends State<_AutomationTab> {
-  final _postUrlCtrl = TextEditingController();
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _postUrlCtrl.text = context.read<AutomationProvider>().postUrl;
-    });
-  }
-  @override
-  void dispose() { _postUrlCtrl.dispose(); super.dispose(); }
-
-  @override
-  Widget build(BuildContext context) {
-    final prov = context.watch<AutomationProvider>();
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (prov.selected != null) ...[
-            const _SectionLabel('TARGET PAGE'),
-            const SizedBox(height: 7),
-            _SelectedPageCard(page: prov.selected!),
-            const SizedBox(height: 14),
-          ] else ...[
-            const _InfoTile(icon: Icons.info_outline_rounded, text: 'Select a page in Page Manager first.'),
-            const SizedBox(height: 14),
-          ],
-          const Divider(color: _divider, height: 1),
-          const SizedBox(height: 14),
-          const _SectionLabel('POST URL TO SHARE'),
-          const SizedBox(height: 7),
-          _ThemedTextField(
-            controller: _postUrlCtrl,
-            hint: 'https://www.facebook.com/share/p/…',
-            prefixIcon: Icons.link_rounded,
-            showPaste: true,
-          ),
-          const SizedBox(height: 7),
-          Row(
-            children: [
-              Expanded(
-                child: _ActionButton(
-                  label: 'Navigate', icon: Icons.open_in_browser_rounded, color: _accent,
-                  enabled: prov.webViewReady,
-                  onTap: () { prov.setPostUrl(_postUrlCtrl.text); prov.navigateToPost(); },
-                ),
-              ),
-              const SizedBox(width: 7),
-              _SmallIconButton(icon: Icons.home_rounded, color: _card, enabled: prov.webViewReady, onTap: prov.navigateHome),
-            ],
-          ),
-          const SizedBox(height: 14),
-          const Divider(color: _divider, height: 1),
-          const SizedBox(height: 14),
-          const _SectionLabel('STATUS'),
-          const SizedBox(height: 7),
-          _StatusCard(status: prov.status, message: prov.statusMsg),
-          const SizedBox(height: 14),
-          const Divider(color: _divider, height: 1),
-          const SizedBox(height: 14),
-          const _SectionLabel('RUN'),
-          const SizedBox(height: 9),
-          _StartButton(prov: prov, urlCtrl: _postUrlCtrl),
-          if (prov.isRunning) ...[
-            const SizedBox(height: 7),
-            _ActionButton(label: 'Stop', icon: Icons.stop_rounded, color: _red, enabled: true, onTap: prov.stopAutomation),
-          ],
-          const SizedBox(height: 16),
-          const _HowToBox(),
-        ],
-      ),
-    );
-  }
-}
-
-class _SelectedPageCard extends StatelessWidget {
-  final FBPage page;
-  const _SelectedPageCard({required this.page});
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(9), border: Border.all(color: _accent.withValues(alpha: .3))),
-      child: Row(
-        children: [
-          _PageAvatar(page: page),
-          const SizedBox(width: 9),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(page.name, style: const TextStyle(color: _accentL, fontSize: 11.5, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 2),
-            Text(page.url, style: const TextStyle(color: _sub, fontSize: 9.5), maxLines: 1, overflow: TextOverflow.ellipsis),
-          ])),
-        ],
-      ),
-    );
-  }
-}
-
-class _StartButton extends StatelessWidget {
-  final AutomationProvider prov;
-  final TextEditingController urlCtrl;
-  const _StartButton({required this.prov, required this.urlCtrl});
-  @override
-  Widget build(BuildContext context) {
-    final canStart = prov.webViewReady && !prov.isRunning;
-    return Material(
-      color: canStart ? _accent : _card,
-      borderRadius: BorderRadius.circular(10),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: canStart ? () { prov.setPostUrl(urlCtrl.text); prov.startAutomation(); } : null,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 13),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (prov.isRunning) const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              else const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 18),
-              const SizedBox(width: 7),
-              Text(prov.isRunning ? 'Running…' : 'Start Automation',
-                  style: TextStyle(color: canStart ? Colors.white : _sub, fontSize: 12.5, fontWeight: FontWeight.w700)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _StatusCard extends StatelessWidget {
-  final AutomationStatus status;
-  final String message;
-  const _StatusCard({required this.status, required this.message});
-
-  Color get _dot {
-    switch (status) {
-      case AutomationStatus.success:  return _green;
-      case AutomationStatus.error:    return _red;
-      case AutomationStatus.running:
-      case AutomationStatus.navigating: return _amber;
-      default: return _sub;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final dot = _dot;
-    return Container(
-      padding: const EdgeInsets.all(11),
-      decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(9), border: Border.all(color: _border)),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 6, height: 6,
-            margin: const EdgeInsets.only(top: 3.5, right: 8),
-            decoration: BoxDecoration(
-              color: dot, shape: BoxShape.circle,
-              boxShadow: [BoxShadow(color: dot.withValues(alpha: .45), blurRadius: 5, spreadRadius: 1)],
-            ),
-          ),
-          Expanded(child: Text(message, style: const TextStyle(color: _text, fontSize: 10.5, height: 1.5))),
-        ],
-      ),
-    );
-  }
-}
-
-class _HowToBox extends StatelessWidget {
-  const _HowToBox();
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(11),
-      decoration: BoxDecoration(
-        color: _accent.withValues(alpha: .06),
-        borderRadius: BorderRadius.circular(9),
-        border: Border.all(color: _accent.withValues(alpha: .16)),
-      ),
-      child: const Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('HOW TO USE', style: TextStyle(color: _accentL, fontSize: 8.5, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
-          SizedBox(height: 7),
-          _Step('1', 'Log in to Facebook inside the WebView.'),
-          _Step('2', 'Page Manager → paste page URL → tap +.'),
-          _Step('3', 'Select the page from the list.'),
-          _Step('4', 'Automation tab → paste post URL.'),
-          _Step('5', 'Tap Navigate, then Start Automation.'),
-        ],
-      ),
-    );
-  }
-}
-
-class _Step extends StatelessWidget {
-  final String num;
-  final String text;
-  const _Step(this.num, this.text);
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 14, height: 14,
-            margin: const EdgeInsets.only(right: 7, top: 1),
-            decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
-            child: Center(child: Text(num, style: const TextStyle(color: Colors.white, fontSize: 7.5, fontWeight: FontWeight.w800))),
-          ),
-          Expanded(child: Text(text, style: const TextStyle(color: _sub, fontSize: 10.5, height: 1.4))),
-        ],
-      ),
-    );
-  }
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
 // MIDDLE — Library Panel with "Saved Posts" + "My Groups" tabs
 // ═════════════════════════════════════════════════════════════════════════════
 class _LibraryPanel extends StatefulWidget {
@@ -631,7 +1295,8 @@ class _LibraryPanel extends StatefulWidget {
 class _LibraryPanelState extends State<_LibraryPanel>
     with SingleTickerProviderStateMixin {
   late final TabController _tabCtrl;
-  final _urlCtrl = TextEditingController();
+  final _urlCtrl  = TextEditingController();
+  final _descCtrl = TextEditingController();
   bool _adding = false;
 
   @override
@@ -644,15 +1309,18 @@ class _LibraryPanelState extends State<_LibraryPanel>
   void dispose() {
     _tabCtrl.dispose();
     _urlCtrl.dispose();
+    _descCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _savePost(AutomationProvider prov) async {
-    final url = _urlCtrl.text.trim();
+    final url  = _urlCtrl.text.trim();
+    final desc = _descCtrl.text.trim();
     if (url.isEmpty || _adding) return;
     setState(() => _adding = true);
     _urlCtrl.clear();
-    await prov.addItem(url);
+    _descCtrl.clear();
+    await prov.addItem(url, manualDesc: desc);
     if (mounted) setState(() => _adding = false);
   }
 
@@ -677,7 +1345,7 @@ class _LibraryPanelState extends State<_LibraryPanel>
                 // ── Tab 0: Saved Posts ────────────────────────────────────
                 Column(
                   children: [
-                    _PostInputBar(urlCtrl: _urlCtrl, adding: _adding, onSave: () => _savePost(prov)),
+                    _PostInputBar(urlCtrl: _urlCtrl, descCtrl: _descCtrl, adding: _adding, onSave: () => _savePost(prov)),
                     Expanded(
                       child: prov.items.isEmpty
                           ? const _LibraryEmptyState()
@@ -797,9 +1465,15 @@ class _LibraryPanelHeader extends StatelessWidget {
 // ── Post input bar (Saved Posts tab header) ───────────────────────────────────
 class _PostInputBar extends StatelessWidget {
   final TextEditingController urlCtrl;
+  final TextEditingController descCtrl;
   final bool adding;
   final VoidCallback onSave;
-  const _PostInputBar({required this.urlCtrl, required this.adding, required this.onSave});
+  const _PostInputBar({
+    required this.urlCtrl,
+    required this.descCtrl,
+    required this.adding,
+    required this.onSave,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -809,19 +1483,61 @@ class _PostInputBar extends StatelessWidget {
         color: _surface,
         border: Border(bottom: BorderSide(color: _divider)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: _ThemedTextField(
-              controller: urlCtrl,
-              hint: 'Paste a Facebook post URL and save…',
-              prefixIcon: Icons.add_link_rounded,
-              showPaste: true,
-              onSubmitted: (_) => onSave(),
-            ),
+          // ── URL row ────────────────────────────────────────────────
+          Row(
+            children: [
+              Expanded(
+                child: _ThemedTextField(
+                  controller: urlCtrl,
+                  hint: 'Paste Facebook post URL…',
+                  prefixIcon: Icons.add_link_rounded,
+                  showPaste: true,
+                  onSubmitted: (_) => onSave(),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          _SaveButton(loading: adding, onTap: onSave),
+          const SizedBox(height: 7),
+          // ── Description row ─────────────────────────────────────────
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: descCtrl,
+                  maxLines: 3,
+                  minLines: 1,
+                  style: const TextStyle(color: _text, fontSize: 11.5),
+                  decoration: InputDecoration(
+                    hintText: 'Add a note or description (optional)…',
+                    hintStyle: const TextStyle(color: _sub, fontSize: 10.5),
+                    prefixIcon: const Icon(Icons.notes_rounded,
+                        color: _sub, size: 14),
+                    filled: true,
+                    fillColor: _card,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 11, vertical: 10),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _border)),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _border)),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(
+                            color: _accent, width: 1.5)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _SaveButton(loading: adding, onTap: onSave),
+            ],
+          ),
         ],
       ),
     );
@@ -1105,69 +1821,54 @@ class _GroupListTileState extends State<_GroupListTile> {
 // which silently completes the share in a hidden WebView. A brief overlay
 // toast confirms the action to the user without blocking the UI.
 //
-class _EmbedCard extends StatefulWidget {
+// ═════════════════════════════════════════════════════════════════════════════
+// LINK PREVIEW CARD  —  image-left + text-right horizontal layout
+// Replaces the old WebView embed card.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// _EmbedCard is kept as an alias so existing references compile
+typedef _EmbedCard = _PreviewCard;
+
+class _PreviewCard extends StatefulWidget {
   final FBItem item;
   final VoidCallback onDelete;
-  const _EmbedCard({super.key, required this.item, required this.onDelete});
+  const _PreviewCard({super.key, required this.item, required this.onDelete});
   @override
-  State<_EmbedCard> createState() => _EmbedCardState();
+  State<_PreviewCard> createState() => _PreviewCardState();
 }
 
-class _EmbedCardState extends State<_EmbedCard> with AutomaticKeepAliveClientMixin {
-  EmbedCardController? _ctrl;
-  bool _initialising = true;
-  bool _expanded = true;
-  StreamSubscription<String>? _urlSub;
-  // Toast overlay for background share feedback
+class _PreviewCardState extends State<_PreviewCard>
+    with AutomaticKeepAliveClientMixin {
+  bool _hovered = false;
+
+  // Toast overlay
   OverlayEntry? _toastEntry;
 
   @override
   bool get wantKeepAlive => true;
 
-  @override
-  void initState() {
-    super.initState();
-    _initController();
+  // ── Time-ago label ─────────────────────────────────────────────────────────
+  String get _timeAgo {
+    final d = DateTime.now().difference(widget.item.savedAt);
+    if (d.inSeconds < 60) return 'just now';
+    if (d.inMinutes < 60) return '${d.inMinutes}m ago';
+    if (d.inHours   < 24) return '${d.inHours}h ago';
+    return '${d.inDays}d ago';
   }
 
-  Future<void> _initController() async {
-    final prov = context.read<AutomationProvider>();
-    final ctrl = await prov.getOrCreateController(widget.item);
-    if (!mounted) return;
-
-    if (ctrl.wvc != null) {
-      _urlSub = ctrl.wvc!.url.listen((url) {
-        if (!mounted) return;
-        if (url.contains('facebook.com/dialog/share') ||
-            url.contains('facebook.com/sharer')) {
-          // Reset the embed card immediately.
-          ctrl.wvc!.loadUrl(widget.item.embedUrl);
-          // Route share to background handler — no blocking modal.
-          _handleShareInBackground(url);
-        }
-      });
-    }
-
-    setState(() { _ctrl = ctrl; _initialising = false; });
+  // ── Short URL display ──────────────────────────────────────────────────────
+  String get _shortUrl {
+    final uri = Uri.tryParse(widget.item.originalUrl);
+    if (uri == null) return widget.item.originalUrl;
+    final path = uri.path.length > 30
+        ? '${uri.path.substring(0, 30)}…'
+        : uri.path;
+    return '${uri.host}$path';
   }
 
-  // ── Background share ──────────────────────────────────────────────────────
-  void _handleShareInBackground(String shareUrl) {
-    _showToast('Sharing in background…', _amber);
-    context.read<AutomationProvider>().handleBackgroundShare(shareUrl).then((_) {
-      if (!mounted) return;
-      final prov = context.read<AutomationProvider>();
-      if (prov.status == AutomationStatus.success) {
-        _showToast('✅ Shared successfully', _green);
-      } else if (prov.status == AutomationStatus.error) {
-        _showToast('❌ Share failed', _red);
-      }
-    });
-  }
-
-  void _showToast(String message, Color color) {
+  // ── Toast helper ───────────────────────────────────────────────────────────
+  void _showToast(String msg, Color color) {
     _toastEntry?.remove();
-    _toastEntry = null;
     final overlay = Overlay.maybeOf(context);
     if (overlay == null) return;
     _toastEntry = OverlayEntry(
@@ -1183,8 +1884,9 @@ class _EmbedCardState extends State<_EmbedCard> with AutomaticKeepAliveClientMix
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: color.withValues(alpha: .4)),
               ),
-              child: Text(message,
-                  style: TextStyle(color: color, fontSize: 11.5, fontWeight: FontWeight.w600)),
+              child: Text(msg,
+                  style: TextStyle(color: color, fontSize: 11.5,
+                      fontWeight: FontWeight.w600)),
             ),
           ),
         ),
@@ -1199,7 +1901,6 @@ class _EmbedCardState extends State<_EmbedCard> with AutomaticKeepAliveClientMix
 
   @override
   void dispose() {
-    _urlSub?.cancel();
     _toastEntry?.remove();
     super.dispose();
   }
@@ -1207,99 +1908,180 @@ class _EmbedCardState extends State<_EmbedCard> with AutomaticKeepAliveClientMix
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      decoration: BoxDecoration(
-        color: _card, borderRadius: BorderRadius.circular(13),
-        border: Border.all(color: _border),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .3), blurRadius: 16, offset: const Offset(0, 5))],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _CardHeader(
-            item: widget.item,
-            expanded: _expanded,
-            onToggle: () => setState(() => _expanded = !_expanded),
-            onDelete: widget.onDelete,
-            onReload: () => _ctrl?.wvc?.loadUrl(widget.item.embedUrl),
-          ),
-          if (_expanded) _EmbedBody(ctrl: _ctrl, initialising: _initialising),
-        ],
-      ),
-    );
-  }
-}
+    final item = widget.item;
+    final hasImage = item.ogImage.isNotEmpty;
+    final hasTitle = item.ogTitle.isNotEmpty;
+    final hasDesc  = item.ogDescription.isNotEmpty;
 
-// ── Card header ───────────────────────────────────────────────────────────────
-class _CardHeader extends StatelessWidget {
-  final FBItem item;
-  final bool expanded;
-  final VoidCallback onToggle;
-  final VoidCallback onDelete;
-  final VoidCallback onReload;
-  const _CardHeader({required this.item, required this.expanded, required this.onToggle, required this.onDelete, required this.onReload});
-
-  String get _shortUrl {
-    final uri = Uri.tryParse(item.originalUrl);
-    if (uri == null) return item.originalUrl;
-    final path = uri.path.length > 28 ? '${uri.path.substring(0, 28)}…' : uri.path;
-    return '${uri.host}$path';
-  }
-
-  String get _timeAgo {
-    final diff = DateTime.now().difference(item.savedAt);
-    if (diff.inSeconds < 60) return 'just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    return '${diff.inDays}d ago';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onToggle, behavior: HitTestBehavior.opaque,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit:  (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        margin: const EdgeInsets.only(bottom: 10),
         decoration: BoxDecoration(
-          color: _cardHov,
-          borderRadius: expanded
-              ? const BorderRadius.vertical(top: Radius.circular(12))
-              : BorderRadius.circular(12),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 26, height: 26,
-              decoration: BoxDecoration(color: _accent.withValues(alpha: .13), borderRadius: BorderRadius.circular(6)),
-              child: const Center(child: Text('f', style: TextStyle(color: _accent, fontSize: 14, fontWeight: FontWeight.w900, height: 1))),
+          color: _hovered ? const Color(0xFF1F2433) : _card,
+          borderRadius: BorderRadius.circular(13),
+          border: Border.all(
+            color: _hovered ? _accent.withValues(alpha: .35) : _border,
+            width: _hovered ? 1.5 : 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: _hovered ? .35 : .2),
+              blurRadius: _hovered ? 18 : 10,
+              offset: const Offset(0, 4),
             ),
-            const SizedBox(width: 9),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ── Main row: image + content ────────────────────────────────────────
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(_shortUrl, style: const TextStyle(color: _text, fontSize: 11, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
-                  const SizedBox(height: 2),
-                  Row(children: [
-                    const Icon(Icons.schedule_rounded, color: _sub, size: 9),
-                    const SizedBox(width: 3),
-                    Text(_timeAgo, style: const TextStyle(color: _sub, fontSize: 9.5)),
-                  ]),
+                  // ── OG Image ───────────────────────────────────────────────────
+                  ClipRRect(
+                    borderRadius: const BorderRadius.only(
+                      topLeft:     Radius.circular(12),
+                      bottomLeft:  Radius.circular(12),
+                    ),
+                    child: SizedBox(
+                      width: 96,
+                      child: hasImage
+                          ? Image.network(
+                              item.ogImage,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) =>
+                                  _NoImagePlaceholder(),
+                            )
+                          : _NoImagePlaceholder(),
+                    ),
+                  ),
+                  // ── Text content ───────────────────────────────────────────────
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(11, 10, 10, 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Title
+                          if (hasTitle)
+                            Text(
+                              item.ogTitle,
+                              style: const TextStyle(
+                                  color: _text,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.3),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          if (hasTitle) const SizedBox(height: 5),
+                          // Description
+                          if (hasDesc)
+                            Text(
+                              item.ogDescription,
+                              style: const TextStyle(
+                                  color: _subL,
+                                  fontSize: 10.5,
+                                  height: 1.45),
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          if (!hasTitle && !hasDesc)
+                            Text(
+                              _shortUrl,
+                              style: const TextStyle(color: _sub, fontSize: 10.5),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          const Spacer(),
+                          // URL chip + time
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: _accent.withValues(alpha: .1),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text('f',
+                                        style: TextStyle(
+                                            color: _accent,
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.w900)),
+                                    const SizedBox(width: 3),
+                                    ConstrainedBox(
+                                      constraints: const BoxConstraints(maxWidth: 110),
+                                      child: Text(
+                                        _shortUrl,
+                                        style: const TextStyle(
+                                            color: _accentL, fontSize: 9),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Spacer(),
+                              Text(_timeAgo,
+                                  style: const TextStyle(
+                                      color: _sub, fontSize: 9)),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
-            _HeaderIconBtn(icon: Icons.copy_rounded, tooltip: 'Copy URL', onTap: () => Clipboard.setData(ClipboardData(text: item.originalUrl))),
-            const SizedBox(width: 1),
-            _HeaderIconBtn(icon: Icons.refresh_rounded, tooltip: 'Reload embed', onTap: onReload),
-            const SizedBox(width: 1),
-            _HeaderIconBtn(
-              icon: expanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
-              tooltip: expanded ? 'Collapse' : 'Expand',
-              onTap: onToggle,
+            // ── Action toolbar ─────────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: const BoxDecoration(
+                color: _surface,
+                borderRadius: BorderRadius.vertical(
+                    bottom: Radius.circular(12)),
+                border: Border(top: BorderSide(color: _divider)),
+              ),
+              child: Row(
+                children: [
+                  _ToolbarBtn(
+                    icon: Icons.copy_rounded,
+                    label: 'Copy URL',
+                    onTap: () {
+                      Clipboard.setData(
+                          ClipboardData(text: item.originalUrl));
+                      _showToast('URL copied!', _accent);
+                    },
+                  ),
+                  const SizedBox(width: 4),
+                  _ToolbarBtn(
+                    icon: Icons.open_in_browser_rounded,
+                    label: 'Open',
+                    onTap: () => context
+                        .read<AutomationProvider>()
+                        .setPostUrl(item.originalUrl),
+                  ),
+                  const Spacer(),
+                  _ToolbarBtn(
+                    icon: Icons.delete_outline_rounded,
+                    label: 'Remove',
+                    color: _red.withValues(alpha: .8),
+                    onTap: widget.onDelete,
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(width: 1),
-            _HeaderIconBtn(icon: Icons.delete_outline_rounded, tooltip: 'Remove', color: _red.withValues(alpha: .7), onTap: onDelete),
           ],
         ),
       ),
@@ -1307,196 +2089,107 @@ class _CardHeader extends StatelessWidget {
   }
 }
 
-class _HeaderIconBtn extends StatelessWidget {
+// ── No-image placeholder ──────────────────────────────────────────────────────
+class _NoImagePlaceholder extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: _surface,
+      child: const Center(
+        child: Icon(Icons.image_not_supported_outlined,
+            color: _sub, size: 22),
+      ),
+    );
+  }
+}
+
+// ── Toolbar action button ─────────────────────────────────────────────────────
+class _ToolbarBtn extends StatelessWidget {
   final IconData icon;
-  final String tooltip;
+  final String label;
   final Color? color;
   final VoidCallback onTap;
-  const _HeaderIconBtn({required this.icon, required this.tooltip, required this.onTap, this.color});
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(6),
-        onTap: onTap,
-        child: Padding(padding: const EdgeInsets.all(5), child: Icon(icon, size: 13, color: color ?? _subL)),
-      ),
-    );
-  }
-}
-
-// ── Embed body ────────────────────────────────────────────────────────────────
-class _EmbedBody extends StatelessWidget {
-  final EmbedCardController? ctrl;
-  final bool initialising;
-  const _EmbedBody({required this.ctrl, required this.initialising});
+  const _ToolbarBtn({required this.icon, required this.label,
+      required this.onTap, this.color});
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
-      child: Container(
-        color: Colors.white, height: 420,
-        child: _buildContent(),
-      ),
-    );
-  }
-
-  Widget _buildContent() {
-    if (initialising || ctrl == null || !ctrl!.ready || ctrl!.wvc == null) {
-      return const _EmbedLoadingPlaceholder();
-    }
-    return Stack(
-      children: [
-        Webview(ctrl!.wvc!),
-        StreamBuilder<LoadingState>(
-          stream: ctrl!.wvc!.loadingState,
-          builder: (_, snap) {
-            if (snap.data != LoadingState.loading) return const SizedBox.shrink();
-            return Container(
-              color: Colors.white.withValues(alpha: .88),
-              child: const Center(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 2.5, color: _accent)),
-                  SizedBox(height: 10),
-                  Text('Loading embed…', style: TextStyle(color: _sub, fontSize: 11, fontWeight: FontWeight.w500)),
-                ]),
-              ),
-            );
-          },
+    final c = color ?? _subL;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 12, color: c),
+            const SizedBox(width: 4),
+            Text(label, style: TextStyle(color: c, fontSize: 10,
+                fontWeight: FontWeight.w500)),
+          ],
         ),
-      ],
-    );
-  }
-}
-
-class _EmbedLoadingPlaceholder extends StatelessWidget {
-  const _EmbedLoadingPlaceholder();
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        SizedBox(width: 26, height: 26, child: CircularProgressIndicator(strokeWidth: 2.5, color: _accent)),
-        SizedBox(height: 12),
-        Text('Initialising WebView…', style: TextStyle(color: _sub, fontSize: 11, fontWeight: FontWeight.w500)),
-        SizedBox(height: 3),
-        Text('Facebook embed will appear here', style: TextStyle(color: _sub, fontSize: 10)),
-      ]),
-    );
-  }
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// RIGHT — Main WebView panel
-// ═════════════════════════════════════════════════════════════════════════════
-class _WebViewPanel extends StatelessWidget {
-  const _WebViewPanel();
-  @override
-  Widget build(BuildContext context) {
-    final prov = context.watch<AutomationProvider>();
-    return Container(
-      color: _bg,
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        children: [
-          _AddressBar(prov: prov),
-          const SizedBox(height: 10),
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: _card,
-                borderRadius: BorderRadius.circular(13),
-                border: Border.all(color: _border, width: 1.5),
-                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .5), blurRadius: 28, offset: const Offset(0, 10))],
-              ),
-              clipBehavior: Clip.hardEdge,
-              child: prov.webviewController == null
-                  ? const Center(child: CircularProgressIndicator(color: _accent))
-                  : Stack(children: [
-                      Webview(prov.webviewController!),
-                      _LoadingOverlay(stream: prov.loadingStream),
-                    ]),
-            ),
-          ),
-        ],
       ),
     );
   }
 }
 
-class _AddressBar extends StatelessWidget {
-  final AutomationProvider prov;
-  const _AddressBar({required this.prov});
+// ── Sync progress banner ─────────────────────────────────────────────────────────────────
+class _SyncProgressBanner extends StatelessWidget {
+  final int groupsFound;
+  const _SyncProgressBanner({required this.groupsFound});
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 36,
-      decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(9), border: Border.all(color: _border)),
-      padding: const EdgeInsets.symmetric(horizontal: 11),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+      decoration: BoxDecoration(
+        color: _accent.withValues(alpha: .07),
+        border: Border(
+          bottom: BorderSide(color: _accent.withValues(alpha: .18)),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Icon(Icons.lock_outline_rounded, color: _sub, size: 12),
-          const SizedBox(width: 7),
-          Expanded(
-            child: StreamBuilder<String>(
-              stream: prov.urlStream,
-              builder: (_, snap) => Text(
-                snap.data ?? 'https://www.facebook.com',
-                style: const TextStyle(color: _sub, fontSize: 10.5), overflow: TextOverflow.ellipsis,
+          Row(
+            children: [
+              const SizedBox(
+                width: 12, height: 12,
+                child: CircularProgressIndicator(
+                    strokeWidth: 1.5, color: _accentL),
               ),
-            ),
-          ),
-          StreamBuilder<LoadingState>(
-            stream: prov.loadingStream,
-            builder: (_, snap) {
-              if (snap.data == LoadingState.loading) {
-                return const SizedBox(width: 12, height: 12,
-                    child: CircularProgressIndicator(strokeWidth: 1.5, color: _accent));
-              }
-              return const Icon(Icons.check_circle_rounded, color: _green, size: 12);
-            },
-          ),
-          const SizedBox(width: 6),
-          // ── DevTools button ────────────────────────────────────────────
-          // Opens the WebView2 Chromium DevTools panel for the main
-          // automation browser. Use it to inspect the mobile Facebook DOM
-          // and find exact selectors for group rows, share buttons, etc.
-          Tooltip(
-            message: 'Open DevTools (Inspect)',
-            child: InkWell(
-              borderRadius: BorderRadius.circular(5),
-              onTap: prov.webViewReady ? prov.openDevTools : null,
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: Icon(
-                  Icons.code_rounded,
-                  size: 13,
-                  color: prov.webViewReady ? _accentL : _sub,
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  'Loaded $groupsFound groups… '
+                  'Please wait, handling slow connection.',
+                  style: const TextStyle(
+                    color: _accentL,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: const LinearProgressIndicator(
+              backgroundColor: Color(0xFF252A38),
+              color: _accent,
+              minHeight: 3,
             ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'The WebView is auto-scrolling to load all groups. '
+            'Watch progress in the floating window.',
+            style: TextStyle(color: _sub, fontSize: 9.5, height: 1.4),
           ),
         ],
       ),
-    );
-  }
-}
-
-class _LoadingOverlay extends StatelessWidget {
-  final Stream<LoadingState>? stream;
-  const _LoadingOverlay({required this.stream});
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<LoadingState>(
-      stream: stream,
-      builder: (_, snap) {
-        if (snap.data != LoadingState.loading) return const SizedBox.shrink();
-        return Container(
-          color: _bg.withValues(alpha: .6),
-          child: const Center(child: CircularProgressIndicator(color: _accent, strokeWidth: 2.5)),
-        );
-      },
     );
   }
 }
@@ -1551,36 +2244,6 @@ class _ThemedTextField extends StatelessWidget {
   }
 }
 
-class _ActionButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final Color color;
-  final bool enabled;
-  final VoidCallback onTap;
-  const _ActionButton({required this.label, required this.icon, required this.color, required this.enabled, required this.onTap});
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: enabled ? color : _card, borderRadius: BorderRadius.circular(8),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: enabled ? onTap : null,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 14, color: enabled ? Colors.white : _sub),
-              const SizedBox(width: 6),
-              Text(label, style: TextStyle(color: enabled ? Colors.white : _sub, fontSize: 12, fontWeight: FontWeight.w600)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _SmallIconButton extends StatelessWidget {
   final IconData icon;
   final Color color;
@@ -1608,41 +2271,3 @@ class _SmallIconButton extends StatelessWidget {
   }
 }
 
-class _EmptyHint extends StatelessWidget {
-  final IconData icon;
-  final String message;
-  const _EmptyHint({required this.icon, required this.message});
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: _border, size: 32),
-          const SizedBox(height: 10),
-          Text(message, textAlign: TextAlign.center, style: const TextStyle(color: _sub, fontSize: 11.5, height: 1.6)),
-        ],
-      ),
-    );
-  }
-}
-
-class _InfoTile extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  const _InfoTile({required this.icon, required this.text});
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(8), border: Border.all(color: _border)),
-      child: Row(
-        children: [
-          Icon(icon, color: _sub, size: 14),
-          const SizedBox(width: 7),
-          Expanded(child: Text(text, style: const TextStyle(color: _sub, fontSize: 10.5, height: 1.4))),
-        ],
-      ),
-    );
-  }
-}
