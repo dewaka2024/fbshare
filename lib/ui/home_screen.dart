@@ -298,7 +298,11 @@ class _NavItemState extends State<_NavItem> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Automation Page  (index 0)
-// Three-column: Control | Groups List | Library
+// NEW: Professional 3-Column Dashboard
+//   Col 1 (25%): Post Repository   — add/select FB post links
+//   Col 2 (40%): Group Categorizer — sync, deep sync, organize groups
+//   Col 3 (35%): Live Status Log   — progress bar + terminal-style log
+// All functionality wired to the existing AutomationProvider.
 // ─────────────────────────────────────────────────────────────────────────────
 class _AutomationPage extends StatefulWidget {
   const _AutomationPage();
@@ -307,320 +311,170 @@ class _AutomationPage extends StatefulWidget {
 }
 
 class _AutomationPageState extends State<_AutomationPage> {
-  final _postLinkCtrl = TextEditingController();
-
-  @override
-  void dispose() {
-    _postLinkCtrl.dispose();
-    super.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
-    final prov = context.watch<AutomationProvider>();
-
-    return Column(
+    return const Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // ── Header bar ─────────────────────────────────────────────────────
-        _PageHeader(prov: prov),
-
-        // ── Body: groups list + library sidebar ────────────────────────────
-        Expanded(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Left column: groups list
-              Expanded(child: _GroupsListColumn(prov: prov)),
-              // Right sidebar: saved posts library
-              const SizedBox(
-                width: 400,
-                child: _LibraryPanel(),
-              ),
-            ],
-          ),
-        ),
-
-        // ── Footer: post link + start sharing ──────────────────────────────
-        _PageFooter(prov: prov, postLinkCtrl: _postLinkCtrl),
+        // Column 1 — Post Repository (flex 25)
+        Expanded(flex: 25, child: _Col1PostRepository()),
+        // Column 2 — Group Categorizer (flex 40)
+        Expanded(flex: 40, child: _Col2GroupCategorizer()),
+        // Column 3 — Live Status Log (flex 35)
+        Expanded(flex: 35, child: _Col3LiveStatus()),
       ],
     );
   }
 }
 
-// ── Header bar ────────────────────────────────────────────────────────────────
-class _PageHeader extends StatelessWidget {
-  final AutomationProvider prov;
-  const _PageHeader({required this.prov});
+// ══════════════════════════════════════════════════════════════════════════════
+// COLUMN 1 — Post Repository
+// ══════════════════════════════════════════════════════════════════════════════
+class _Col1PostRepository extends StatefulWidget {
+  const _Col1PostRepository();
+  @override
+  State<_Col1PostRepository> createState() => _Col1PostRepositoryState();
+}
 
-  Color get _statusColor {
-    switch (prov.status) {
-      case AutomationStatus.success:   return _green;
-      case AutomationStatus.error:     return _red;
-      case AutomationStatus.running:
-      case AutomationStatus.navigating: return _amber;
-      default: return _sub;
-    }
+class _Col1PostRepositoryState extends State<_Col1PostRepository> {
+  final _urlCtrl   = TextEditingController();
+  final _descCtrl  = TextEditingController();
+  final _urlFocus  = FocusNode();
+  final _descFocus = FocusNode();
+  bool _adding = false;
+
+  @override
+  void dispose() {
+    _urlCtrl.dispose(); _descCtrl.dispose();
+    _urlFocus.dispose(); _descFocus.dispose();
+    super.dispose();
   }
 
-  String get _statusLabel {
-    switch (prov.status) {
-      case AutomationStatus.success:    return 'Success';
-      case AutomationStatus.error:      return 'Error';
-      case AutomationStatus.running:    return 'Running…';
-      case AutomationStatus.navigating: return 'Navigating…';
-      default: return 'Ready';
-    }
+  Future<void> _save(AutomationProvider prov) async {
+    final url = _urlCtrl.text.trim();
+    if (url.isEmpty || _adding) return;
+    setState(() => _adding = true);
+    _urlCtrl.clear(); _descCtrl.clear();
+    await prov.addItem(url, manualDesc: _descCtrl.text.trim());
+    if (mounted) setState(() => _adding = false);
+    _urlFocus.requestFocus();
   }
 
   @override
   Widget build(BuildContext context) {
+    final prov = context.watch<AutomationProvider>();
     return Container(
-      height: 56,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
       decoration: const BoxDecoration(
         color: _surface,
-        border: Border(bottom: BorderSide(color: _divider)),
+        border: Border(right: BorderSide(color: _divider)),
       ),
-      child: Row(
-        children: [
-          // Page title
-          const Text('Automation',
-              style: TextStyle(
-                  color: _text,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700)),
-          const SizedBox(width: 8),
-          const Text('Groups & Sharing',
-              style: TextStyle(color: _sub, fontSize: 11)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // ── Column header ─────────────────────────────────────────────────
+        _DashColHeader(icon: Icons.bookmark_rounded, title: 'Post Repository', badge: prov.items.length),
 
-          const Spacer(),
-
-          // Status chip
-          Container(
-            padding: const EdgeInsets.symmetric(
-                horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: _statusColor.withValues(alpha: .1),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                  color: _statusColor.withValues(alpha: .3)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 6, height: 6,
-                  decoration: BoxDecoration(
-                    color: _statusColor,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                          color: _statusColor.withValues(alpha: .5),
-                          blurRadius: 4),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  'Status: $_statusLabel',
-                  style: TextStyle(
-                      color: _statusColor,
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w600),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-
-          // Sync Groups button
-          ElevatedButton.icon(
-            onPressed: prov.webViewReady && !prov.isSyncing
-                ? () => prov.fetchGroups()
-                : null,
-            icon: prov.isSyncing
-                ? const SizedBox(
-                    width: 13, height: 13,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 1.8, color: Colors.white))
-                : const Icon(Icons.sync_rounded, size: 15),
-            label: Text(prov.isSyncing
-                ? 'Syncing… (${prov.groupsFound})'
-                : 'Sync Groups'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _accent,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 16, vertical: 10),
-              textStyle: const TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w600),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(9)),
-              elevation: 0,
-            ),
-          ),
-          const SizedBox(width: 10),
-
-          // Deep Sync button
-          Tooltip(
-            message: prov.isDeepSyncing
-                ? 'Processing group ${prov.deepSyncIndex + 1} of ${prov.groups.length}'
-                : 'Deep Sync — resolve real URLs for each group',
-            child: ElevatedButton.icon(
-              onPressed: prov.webViewReady && prov.groups.isNotEmpty
-                  ? (prov.isDeepSyncing
-                      ? () => prov.stopDeepSync()
-                      : () => prov.deepSync())
-                  : null,
-              icon: prov.isDeepSyncing
-                  ? const SizedBox(
-                      width: 13, height: 13,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 1.8, color: Colors.white))
-                  : const Icon(Icons.travel_explore_rounded, size: 15),
-              label: Text(prov.isDeepSyncing
-                  ? 'Stop (${prov.deepSyncIndex + 1}/${prov.groups.length})'
-                  : 'Deep Sync'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor:
-                    prov.isDeepSyncing ? _amber : const Color(0xFF7C3AED),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 10),
-                textStyle: const TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w600),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(9)),
-                elevation: 0,
+        // ── Add new link form ─────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
+          child: _DashCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Icon(Icons.add_link_rounded, size: 13, color: _accentL),
+              const SizedBox(width: 6),
+              Text('ADD NEW LINK', style: _dashLabelStyle()),
+            ]),
+            const SizedBox(height: 9),
+            _ThemedTextField(controller: _urlCtrl, hint: 'https://facebook.com/…',
+                prefixIcon: Icons.link_rounded, showPaste: true,
+                onSubmitted: (_) => _descFocus.requestFocus()),
+            const SizedBox(height: 7),
+            _ThemedTextField(controller: _descCtrl, hint: 'Label / note (optional)',
+                prefixIcon: Icons.notes_rounded,
+                onSubmitted: (_) => _save(prov)),
+            const SizedBox(height: 9),
+            SizedBox(
+              width: double.infinity, height: 36,
+              child: _DashAccentButton(
+                icon: Icons.bookmark_add_rounded,
+                label: _adding ? 'Saving…' : 'Save Post',
+                onPressed: _adding ? null : () => _save(prov),
               ),
             ),
-          ),
-          const SizedBox(width: 10),
-          // Settings
-          Tooltip(
-            message: 'Automation settings',
-            child: _IconBtn(
-              icon: Icons.tune_rounded,
-              onTap: () => _showAutomationSettings(context, prov),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+          ])),
+        ),
 
-  void _showAutomationSettings(
-      BuildContext context, AutomationProvider prov) {
-    showDialog(
-      context: context,
-      builder: (_) => _AutomationSettingsDialog(prov: prov),
-    );
-  }
-}
+        // ── Saved posts list header ───────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(children: [
+            Text('SAVED POSTS', style: _dashLabelStyle()),
+            const Spacer(),
+            if (prov.items.isNotEmpty)
+              Text('${prov.items.length}',
+                  style: const TextStyle(color: _subL, fontSize: 10.5, fontWeight: FontWeight.w600)),
+          ]),
+        ),
+        const SizedBox(height: 6),
 
-// ── Groups list column (middle of automation page) ─────────────────────────────
-class _GroupsListColumn extends StatelessWidget {
-  final AutomationProvider prov;
-  const _GroupsListColumn({required this.prov});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: _bg,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Sub-header
-          if (prov.isSyncing) _SyncProgressBanner(groupsFound: prov.groupsFound),
-          if (prov.groupsError != null && !prov.isSyncing)
-            _ErrorBanner(message: prov.groupsError!),
-
-          // Group count label
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-            child: Row(
-              children: [
-                const Icon(Icons.group_rounded, color: _sub, size: 13),
-                const SizedBox(width: 6),
-                Text(
-                  prov.groups.isEmpty
-                      ? 'No groups loaded'
-                      : '${prov.groups.length} groups',
-                  style: const TextStyle(
-                      color: _sub,
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.3),
+        // ── Posts list ────────────────────────────────────────────────────
+        Expanded(
+          child: prov.items.isEmpty
+              ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.inbox_rounded, color: _sub, size: 32),
+                  SizedBox(height: 8),
+                  Text('No posts saved yet', style: TextStyle(color: _sub, fontSize: 12)),
+                ]))
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(10, 0, 10, 4),
+                  itemCount: prov.items.length,
+                  itemBuilder: (_, i) {
+                    final item = prov.items[i];
+                    final isSelected = prov.postUrl == item.originalUrl;
+                    return _PostRepositoryTile(
+                      item: item,
+                      isSelected: isSelected,
+                      onTap: () => prov.setPostUrl(item.originalUrl),
+                      onDelete: () => prov.removeItem(item.id),
+                    );
+                  },
                 ),
-                if (prov.groups.isNotEmpty) ...[
-                  const Spacer(),
-                  GestureDetector(
-                    onTap: prov.clearGroups,
-                    child: const Text('Clear',
-                        style: TextStyle(
-                            color: _sub,
-                            fontSize: 9.5,
-                            decoration: TextDecoration.underline)),
-                  ),
-                ],
-              ],
-            ),
-          ),
+        ),
 
-          // Groups list
-          Expanded(
-            child: prov.groups.isEmpty
-                ? _GroupsEmptyState(prov: prov)
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(10, 0, 10, 80),
-                    itemCount: prov.groups.length,
-                    itemBuilder: (_, i) {
-                      final g = prov.groups[i];
-                      return _GroupRowCard(
-                        key: ValueKey(g.name),
-                        group: g,
-                        active: prov.isDeepSyncing &&
-                            prov.highlightedGroup == g.name,
-                        onTap: () => prov.navigateToGroup(g),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
+        // ── START AUTOMATION button ───────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
+          child: _StartSharingButton(),
+        ),
+      ]),
     );
   }
 }
 
-// ── Group row card ─────────────────────────────────────────────────────────────
-class _GroupRowCard extends StatefulWidget {
-  final FBGroup group;
-  final bool    active;   // true when deepSync is processing this row
+// Post tile in repository
+class _PostRepositoryTile extends StatefulWidget {
+  final FBItem item;
+  final bool isSelected;
   final VoidCallback onTap;
-  const _GroupRowCard({
-    super.key,
-    required this.group,
-    required this.onTap,
-    this.active = false,
-  });
+  final VoidCallback onDelete;
+  const _PostRepositoryTile({required this.item, required this.isSelected, required this.onTap, required this.onDelete});
   @override
-  State<_GroupRowCard> createState() => _GroupRowCardState();
+  State<_PostRepositoryTile> createState() => _PostRepositoryTileState();
 }
 
-class _GroupRowCardState extends State<_GroupRowCard> {
+class _PostRepositoryTileState extends State<_PostRepositoryTile> {
   bool _hovered = false;
 
+  String get _displayName {
+    if (widget.item.ogTitle.isNotEmpty) return widget.item.ogTitle;
+    final uri = Uri.tryParse(widget.item.originalUrl);
+    if (uri != null) {
+      final segs = uri.pathSegments.where((s) => s.isNotEmpty).toList();
+      if (segs.isNotEmpty) return segs.last;
+    }
+    return widget.item.originalUrl;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final active  = widget.active;
-    final hasUrl  = widget.group.url.isNotEmpty;
-    final hasId   = widget.group.groupId.isNotEmpty;
-
-    // Subtitle: show groupId badge + short URL if available
-    final subtitle = hasUrl
-        ? _shortUrl(widget.group.url)
-        : 'Index ${widget.group.index}';
-
+    final sel = widget.isSelected;
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit:  (_) => setState(() => _hovered = false),
@@ -629,135 +483,1053 @@ class _GroupRowCardState extends State<_GroupRowCard> {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           margin: const EdgeInsets.only(bottom: 6),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            // Active row: bright blue glow
-            color: active
-                ? _accent.withValues(alpha: .15)
-                : _hovered
-                    ? const Color(0xFF1F2433)
-                    : _card,
+            color: sel ? _accent.withValues(alpha: .15) : (_hovered ? _cardHov : _card),
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: active
-                  ? _accent
-                  : _hovered
-                      ? _accent.withValues(alpha: .3)
-                      : _border,
-              width: active ? 1.5 : (_hovered ? 1.5 : 1),
-            ),
-            boxShadow: active
-                ? [BoxShadow(
-                    color: _accent.withValues(alpha: .25),
-                    blurRadius: 10,
-                    offset: const Offset(0, 2))]
-                : null,
+            border: Border.all(color: sel ? _accent.withValues(alpha: .5) : _border),
           ),
-          child: Row(
-            children: [
-              // Leading avatar
-              _GroupCircleAvatar(imageUrl: widget.group.imageUrl),
-              const SizedBox(width: 10),
+          child: Row(children: [
+            Container(
+              width: 30, height: 30,
+              decoration: BoxDecoration(
+                color: sel ? _accent.withValues(alpha: .2) : _surface,
+                borderRadius: BorderRadius.circular(7),
+              ),
+              child: Icon(Icons.article_rounded, size: 15, color: sel ? _accentL : _sub),
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(_displayName,
+                style: TextStyle(color: sel ? _text : _subL, fontSize: 12, fontWeight: FontWeight.w600),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+              const SizedBox(height: 2),
+              Text(widget.item.originalUrl,
+                style: const TextStyle(color: _sub, fontSize: 9.5),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+            ])),
+            if (sel) const Icon(Icons.check_circle_rounded, color: _accentL, size: 14),
+            if (_hovered && !sel)
+              GestureDetector(onTap: widget.onDelete,
+                child: const Icon(Icons.close_rounded, color: _sub, size: 14)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
 
-              // Name + subtitle row
+// Start Sharing / Stop button
+class _StartSharingButton extends StatefulWidget {
+  @override
+  State<_StartSharingButton> createState() => _StartSharingButtonState();
+}
+
+class _StartSharingButtonState extends State<_StartSharingButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _glow;
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat(reverse: true);
+    _glow = Tween<double>(begin: 6.0, end: 18.0).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
+  }
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final prov = context.watch<AutomationProvider>();
+    final canStart = prov.webViewReady && prov.postUrl.isNotEmpty && prov.groups.isNotEmpty;
+    final running  = prov.isRunning;
+
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) => GestureDetector(
+        onTap: () {
+          if (running) {
+            prov.stopAutomation();
+          } else if (canStart) {
+            prov.startAutomation();
+          }
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          height: 52,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: running
+                  ? [_red, const Color(0xFFCC2233)]
+                  : canStart
+                      ? [_accent, const Color(0xFF1565D8)]
+                      : [_sub.withValues(alpha: .4), _sub.withValues(alpha: .3)],
+              begin: Alignment.topLeft, end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [BoxShadow(
+              color: (running ? _red : canStart ? _accent : Colors.transparent).withValues(alpha: canStart ? .4 : 0),
+              blurRadius: (canStart && !running) ? _glow.value : 6,
+            )],
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(running ? Icons.stop_rounded : Icons.play_arrow_rounded, color: Colors.white, size: 22),
+            const SizedBox(width: 8),
+            Text(
+              running ? 'STOP AUTOMATION' : canStart ? 'START AUTOMATION' : 'SELECT POST & GROUPS',
+              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: .6),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COLUMN 2 — Group Categorizer
+// ══════════════════════════════════════════════════════════════════════════════
+class _Col2GroupCategorizer extends StatelessWidget {
+  const _Col2GroupCategorizer();
+
+  @override
+  Widget build(BuildContext context) {
+    final prov = context.watch<AutomationProvider>();
+    return Container(
+      color: _bg,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // ── Column header ─────────────────────────────────────────────────
+        _DashColHeader(icon: Icons.account_tree_rounded, title: 'Group Categorizer', badge: prov.groups.length),
+
+        // ── Sync control card ─────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
+          child: _DashCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // Status row
+            Row(children: [
+              Text('SYNC STATUS', style: _dashLabelStyle()),
+              const Spacer(),
+              if (prov.isSyncing)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(color: _amber.withValues(alpha: .12), borderRadius: BorderRadius.circular(4)),
+                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                    SizedBox(width: 8, height: 8,
+                      child: CircularProgressIndicator(strokeWidth: 1.5)),
+                    SizedBox(width: 5),
+                    Text('SYNCING', style: TextStyle(color: _amber, fontSize: 9, fontWeight: FontWeight.w700)),
+                  ]),
+                )
+              else if (prov.groups.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(color: _green.withValues(alpha: .1), borderRadius: BorderRadius.circular(4)),
+                  child: const Text('SYNCED', style: TextStyle(color: _green, fontSize: 9, fontWeight: FontWeight.w700)),
+                ),
+            ]),
+            const SizedBox(height: 8),
+
+            // Sync + Deep Sync buttons
+            Row(children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Group name + active spinner
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            widget.group.name,
-                            style: TextStyle(
-                                color: active
-                                    ? Colors.white
-                                    : _hovered ? _accentL : _text,
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w600),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        if (active) ...[
-                          const SizedBox(width: 6),
-                          const SizedBox(
-                            width: 11, height: 11,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 1.8,
-                                color: _accentL),
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 3),
-                    // groupId badge + URL
-                    Row(
-                      children: [
-                        if (hasId) ...[
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 5, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: _green.withValues(alpha: .15),
-                              borderRadius: BorderRadius.circular(4),
-                              border: Border.all(
-                                  color: _green.withValues(alpha: .3)),
-                            ),
-                            child: Text(
-                              'ID: ${widget.group.groupId}',
-                              style: const TextStyle(
-                                  color: _green,
-                                  fontSize: 8.5,
-                                  fontWeight: FontWeight.w700),
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                        ],
-                        Expanded(
-                          child: Text(
-                            subtitle,
-                            style: TextStyle(
-                                color: active ? _accentL : _sub,
-                                fontSize: 9.5),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                child: SizedBox(height: 34,
+                  child: _DashAccentButton(
+                    icon: Icons.sync_rounded,
+                    label: prov.isSyncing ? 'Syncing… (${prov.groupsFound})' : 'Sync Groups',
+                    color: _accent,
+                    onPressed: prov.webViewReady && !prov.isSyncing ? () => prov.fetchGroups() : null,
+                  )),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: SizedBox(height: 34,
+                  child: _DashAccentButton(
+                    icon: prov.isDeepSyncing ? Icons.stop_rounded : Icons.travel_explore_rounded,
+                    label: prov.isDeepSyncing
+                        ? 'Stop (${prov.deepSyncIndex + 1}/${prov.groups.length})'
+                        : 'Deep Sync',
+                    color: prov.isDeepSyncing ? _amber : const Color(0xFF7C3AED),
+                    onPressed: prov.webViewReady && prov.groups.isNotEmpty
+                        ? (prov.isDeepSyncing ? prov.stopDeepSync : prov.deepSync)
+                        : null,
+                  )),
+              ),
+            ]),
+            const SizedBox(height: 8),
+
+            // Progress bar: groups found / total
+            Row(children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: prov.groups.isEmpty ? 0
+                        : prov.isDeepSyncing
+                            ? prov.deepSyncIndex / prov.groups.length
+                            : 1.0,
+                    backgroundColor: _border,
+                    valueColor: AlwaysStoppedAnimation<Color>(prov.isSyncing ? _amber : _accent),
+                    minHeight: 5,
+                  ),
                 ),
               ),
+              const SizedBox(width: 8),
+              Text(
+                prov.isSyncing
+                    ? '${prov.groupsFound} found'
+                    : '${prov.groups.length} groups',
+                style: const TextStyle(color: _subL, fontSize: 10.5, fontWeight: FontWeight.w500),
+              ),
+            ]),
 
-              const SizedBox(width: 6),
-              // Trailing: green check if URL resolved, grey otherwise
-              AnimatedOpacity(
-                opacity: active ? 1 : (_hovered ? 1 : 0.4),
-                duration: const Duration(milliseconds: 150),
-                child: Icon(
-                  hasUrl
-                      ? Icons.check_circle_rounded
-                      : Icons.radio_button_unchecked_rounded,
-                  size: 15,
-                  color: hasUrl ? _green : _sub,
-                ),
+            // Error message
+            if (prov.groupsError != null && !prov.isSyncing) ...[
+              const SizedBox(height: 7),
+              Row(children: [
+                const Icon(Icons.error_outline_rounded, color: _red, size: 12),
+                const SizedBox(width: 5),
+                Expanded(child: Text(prov.groupsError!,
+                    style: const TextStyle(color: _red, fontSize: 10, height: 1.3),
+                    maxLines: 2, overflow: TextOverflow.ellipsis)),
+              ]),
+            ],
+
+            // DeepSync progress
+            if (prov.isDeepSyncing && prov.highlightedGroup.isNotEmpty) ...[
+              const SizedBox(height: 7),
+              Row(children: [
+                const SizedBox(width: 10, height: 10,
+                    child: CircularProgressIndicator(strokeWidth: 1.5, color: _accentL)),
+                const SizedBox(width: 7),
+                Expanded(child: Text('Processing: ${prov.highlightedGroup}',
+                    style: const TextStyle(color: _accentL, fontSize: 10.5),
+                    maxLines: 1, overflow: TextOverflow.ellipsis)),
+              ]),
+            ],
+          ])),
+        ),
+
+        // ── Groups accordion list ─────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+          child: Row(children: [
+            Text('GROUPS', style: _dashLabelStyle()),
+            const Spacer(),
+            GestureDetector(
+              onTap: () => _showNewCategoryDialog(context, prov),
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.create_new_folder_rounded, size: 13, color: _accentL),
+                SizedBox(width: 4),
+                Text('New Category', style: TextStyle(color: _accentL, fontSize: 10.5, fontWeight: FontWeight.w600)),
+              ]),
+            ),
+            if (prov.groups.isNotEmpty) ...[
+              const SizedBox(width: 12),
+              GestureDetector(
+                onTap: prov.clearGroups,
+                child: const Text('Clear', style: TextStyle(color: _sub, fontSize: 10, decoration: TextDecoration.underline)),
               ),
             ],
+          ]),
+        ),
+
+        if (prov.isSyncing) _SyncProgressBanner(groupsFound: prov.groupsFound),
+
+        Expanded(
+          child: prov.groups.isEmpty
+              ? _GroupsEmptyState(prov: prov)
+              : ListView(
+                  padding: const EdgeInsets.fromLTRB(10, 0, 10, 12),
+                  children: [
+                    // Uncategorized accordion
+                    _CategoryAccordion(
+                      label: 'Uncategorized',
+                      categoryId: '',
+                      isExpanded: true,
+                      isUncategorized: true,
+                      groups: prov.groupsForCategory(''),
+                      allCategories: prov.categories,
+                      highlightedGroup: prov.highlightedGroup,
+                      onTapGroup: (g) => prov.navigateToGroup(g),
+                      onMoveGroup: (groupName, catId) => prov.moveGroupToCategory(groupName, catId),
+                    ),
+                    const SizedBox(height: 6),
+                    // Named categories
+                    ...prov.categories.map((cat) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: _CategoryAccordion(
+                        label: cat.name,
+                        categoryId: cat.id,
+                        isExpanded: cat.isExpanded,
+                        isUncategorized: false,
+                        groups: prov.groupsForCategory(cat.id),
+                        allCategories: prov.categories,
+                        highlightedGroup: prov.highlightedGroup,
+                        onTapGroup: (g) => prov.navigateToGroup(g),
+                        onMoveGroup: (groupName, catId) => prov.moveGroupToCategory(groupName, catId),
+                        onToggleExpand: () => prov.toggleCategoryExpanded(cat.id),
+                        onDelete: prov.groupsForCategory(cat.id).isEmpty
+                            ? () => prov.removeCategory(cat.id)
+                            : null,
+                        onAddGroups: () => _showGroupPickerDialog(context, prov, cat.id, cat.name),
+                      ),
+                    )),
+                  ],
+                ),
+        ),
+      ]),
+    );
+  }
+
+  void _showGroupPickerDialog(BuildContext context, AutomationProvider prov, String categoryId, String categoryName) {
+    // Groups not already in this category
+    final available = prov.groups.where((g) => g.categoryId != categoryId).toList();
+    if (available.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('All groups are already in "$categoryName"'),
+          backgroundColor: _card,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    // Track which groups are checked inside the dialog
+    final selected = <String>{};
+
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: _card,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+              side: const BorderSide(color: _border)),
+          title: Row(children: [
+            const Icon(Icons.folder_rounded, color: _amber, size: 18),
+            const SizedBox(width: 8),
+            Expanded(child: Text('Add groups to "$categoryName"',
+                style: const TextStyle(color: _text, fontSize: 14, fontWeight: FontWeight.w600))),
+          ]),
+          content: SizedBox(
+            width: 360,
+            height: 400,
+            child: Column(children: [
+              // Select all / deselect all
+              Row(children: [
+                TextButton(
+                  onPressed: () => setDialogState(() => selected.addAll(available.map((g) => g.name))),
+                  child: const Text('Select all', style: TextStyle(color: _accentL, fontSize: 11)),
+                ),
+                TextButton(
+                  onPressed: () => setDialogState(() => selected.clear()),
+                  child: const Text('Clear', style: TextStyle(color: _sub, fontSize: 11)),
+                ),
+                const Spacer(),
+                Text('${selected.length} selected',
+                    style: const TextStyle(color: _subL, fontSize: 11)),
+              ]),
+              const Divider(color: _border, height: 1),
+              // Scrollable group list
+              Expanded(
+                child: ListView.builder(
+                  itemCount: available.length,
+                  itemBuilder: (_, i) {
+                    final g = available[i];
+                    final isChecked = selected.contains(g.name);
+                    return InkWell(
+                      onTap: () => setDialogState(() {
+                        if (isChecked) { selected.remove(g.name); }
+                        else { selected.add(g.name); }
+                      }),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                        child: Row(children: [
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 120),
+                            width: 18, height: 18,
+                            decoration: BoxDecoration(
+                              color: isChecked ? _accent : Colors.transparent,
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: isChecked ? _accent : _sub, width: 1.5),
+                            ),
+                            child: isChecked
+                                ? const Icon(Icons.check_rounded, size: 12, color: Colors.white)
+                                : null,
+                          ),
+                          const SizedBox(width: 10),
+                          _GroupCircleAvatar(imageUrl: g.imageUrl),
+                          const SizedBox(width: 8),
+                          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(g.name,
+                                style: TextStyle(
+                                    color: isChecked ? _text : _subL,
+                                    fontSize: 12, fontWeight: FontWeight.w500),
+                                maxLines: 1, overflow: TextOverflow.ellipsis),
+                            if (g.categoryId.isNotEmpty)
+                              Text('Currently in: ${prov.categories.firstWhere((c) => c.id == g.categoryId, orElse: () => GroupCategory(id: '', name: 'Unknown')).name}',
+                                  style: const TextStyle(color: _sub, fontSize: 9.5)),
+                          ])),
+                        ]),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ]),
           ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel', style: TextStyle(color: _subL))),
+            ElevatedButton.icon(
+              onPressed: selected.isEmpty ? null : () {
+                for (final name in selected) {
+                  prov.moveGroupToCategory(name, categoryId);
+                }
+                Navigator.pop(context);
+              },
+              icon: const Icon(Icons.check_rounded, size: 14),
+              label: Text('Add ${selected.isEmpty ? '' : '(${selected.length})'}'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _accent, foregroundColor: Colors.white,
+                disabledBackgroundColor: _sub.withValues(alpha: .3),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                elevation: 0,
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  String _shortUrl(String url) {
-    final uri = Uri.tryParse(url);
-    if (uri == null) return url;
-    final segs = uri.pathSegments
-        .where((s) => s.isNotEmpty && s != 'groups')
-        .join('/');
-    return segs.isEmpty ? uri.host : segs;
+  void _showNewCategoryDialog(BuildContext context, AutomationProvider prov) {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: const BorderSide(color: _border)),
+        title: const Row(children: [
+          Icon(Icons.create_new_folder_rounded, color: _accentL, size: 18),
+          SizedBox(width: 8),
+          Text('Create Category', style: TextStyle(color: _text, fontSize: 15, fontWeight: FontWeight.w600)),
+        ]),
+        content: SizedBox(
+          width: 300,
+          child: _ThemedTextField(controller: ctrl, hint: 'e.g. Sales, Leads, Marketing', prefixIcon: Icons.label_rounded),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel', style: TextStyle(color: _subL))),
+          ElevatedButton(
+            onPressed: () { prov.addCategory(ctrl.text); Navigator.pop(context); },
+            style: ElevatedButton.styleFrom(backgroundColor: _accent, foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)), elevation: 0),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Category Accordion widget ──────────────────────────────────────────────────
+class _CategoryAccordion extends StatelessWidget {
+  final String label;
+  final String categoryId;
+  final bool isExpanded;
+  final bool isUncategorized;
+  final List<FBGroup> groups;
+  final List<GroupCategory> allCategories;
+  final String highlightedGroup;
+  final void Function(FBGroup g) onTapGroup;
+  final void Function(String groupName, String catId) onMoveGroup;
+  final VoidCallback? onToggleExpand;
+  final VoidCallback? onDelete;
+  final VoidCallback? onAddGroups; // opens group-picker dialog
+
+  const _CategoryAccordion({
+    required this.label,
+    required this.categoryId,
+    required this.groups,
+    required this.allCategories,
+    required this.highlightedGroup,
+    required this.onTapGroup,
+    required this.onMoveGroup,
+    this.isExpanded = true,
+    this.isUncategorized = false,
+    this.onToggleExpand,
+    this.onDelete,
+    this.onAddGroups,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _card,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Column(children: [
+        // ── Header ──
+        GestureDetector(
+          onTap: isUncategorized ? onToggleExpand : onAddGroups,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Row(children: [
+              // expand/collapse arrow (only for uncategorized or when expanded)
+              GestureDetector(
+                onTap: onToggleExpand,
+                child: Icon(isExpanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                    color: _subL, size: 15),
+              ),
+              const SizedBox(width: 6),
+              Icon(isUncategorized ? Icons.help_outline_rounded : Icons.folder_rounded,
+                  size: 14, color: isUncategorized ? _sub : _amber),
+              const SizedBox(width: 6),
+              Expanded(child: Text(label,
+                  style: TextStyle(
+                      color: isUncategorized ? _subL : _text,
+                      fontSize: 12.5, fontWeight: FontWeight.w600))),
+              // "Add groups" hint for named categories
+              if (!isUncategorized)
+                const Padding(
+                  padding: EdgeInsets.only(right: 6),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.add_rounded, size: 13, color: _accentL),
+                    SizedBox(width: 2),
+                    Text('Add', style: TextStyle(color: _accentL, fontSize: 10, fontWeight: FontWeight.w600)),
+                  ]),
+                ),
+              // Group count badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                    color: _surface, borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: _border)),
+                child: Text('${groups.length}',
+                    style: const TextStyle(color: _subL, fontSize: 10, fontWeight: FontWeight.w600)),
+              ),
+              // Delete button (only for empty named categories)
+              if (!isUncategorized && onDelete != null) ...[
+                const SizedBox(width: 6),
+                GestureDetector(onTap: onDelete,
+                    child: const Icon(Icons.delete_outline_rounded, color: _sub, size: 14)),
+              ],
+            ]),
+          ),
+        ),
+        // ── Group tiles ──
+        if (isExpanded) ...[
+          if (groups.isNotEmpty) ...[
+            const Divider(color: _divider, height: 1),
+            ...groups.map((g) => _CategoryGroupTile(
+              group: g,
+              isActive: highlightedGroup == g.name,
+              allCategories: allCategories,
+              currentCategoryId: categoryId,
+              onTap: () => onTapGroup(g),
+              onMove: (catId) => onMoveGroup(g.name, catId),
+            )),
+            const SizedBox(height: 4),
+          ] else
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.touch_app_rounded, color: _sub, size: 20),
+                const SizedBox(height: 4),
+                Text(
+                  isUncategorized ? 'No uncategorized groups' : 'Tap category header to add groups',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: _sub, fontSize: 11, fontStyle: FontStyle.italic),
+                ),
+              ]),
+            ),
+        ],
+      ]),
+    );
+  }
+}
+
+// ── Group tile inside a category ───────────────────────────────────────────────
+class _CategoryGroupTile extends StatefulWidget {
+  final FBGroup group;
+  final bool isActive;
+  final List<GroupCategory> allCategories;
+  final String currentCategoryId;
+  final VoidCallback onTap;
+  final void Function(String catId) onMove;
+  const _CategoryGroupTile({
+    required this.group, required this.isActive, required this.allCategories,
+    required this.currentCategoryId, required this.onTap, required this.onMove,
+  });
+  @override
+  State<_CategoryGroupTile> createState() => _CategoryGroupTileState();
+}
+
+class _CategoryGroupTileState extends State<_CategoryGroupTile> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = widget.isActive;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit:  (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: active ? _accent.withValues(alpha: .12)
+                : _hovered ? _cardHov : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            border: active ? Border.all(color: _accent.withValues(alpha: .4)) : null,
+          ),
+          child: Row(children: [
+            _GroupCircleAvatar(imageUrl: widget.group.imageUrl),
+            const SizedBox(width: 8),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(child: Text(widget.group.name,
+                    style: TextStyle(
+                        color: active ? Colors.white : (_hovered ? _accentL : _text),
+                        fontSize: 12, fontWeight: FontWeight.w600),
+                    maxLines: 1, overflow: TextOverflow.ellipsis)),
+                if (active) ...[
+                  const SizedBox(width: 6),
+                  const SizedBox(width: 10, height: 10,
+                      child: CircularProgressIndicator(strokeWidth: 1.5, color: _accentL)),
+                ],
+              ]),
+              if (widget.group.groupId.isNotEmpty || widget.group.url.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  widget.group.groupId.isNotEmpty
+                      ? 'ID: ${widget.group.groupId}'
+                      : widget.group.url,
+                  style: const TextStyle(color: _sub, fontSize: 9.5),
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ])),
+            // Move to category popup
+            if (_hovered && widget.allCategories.isNotEmpty)
+              PopupMenuButton<String>(
+                tooltip: 'Move to category',
+                padding: EdgeInsets.zero,
+                color: _card,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    side: const BorderSide(color: _border)),
+                icon: const Icon(Icons.drive_file_move_rounded, size: 14, color: _subL),
+                onSelected: widget.onMove,
+                itemBuilder: (_) => [
+                  if (widget.currentCategoryId != '')
+                    const PopupMenuItem(value: '',
+                      child: Row(children: [
+                        Icon(Icons.folder_off_rounded, size: 14, color: _sub),
+                        SizedBox(width: 6),
+                        Text('Uncategorized', style: TextStyle(color: _subL, fontSize: 12)),
+                      ])),
+                  ...widget.allCategories
+                      .where((c) => c.id != widget.currentCategoryId)
+                      .map((cat) => PopupMenuItem(value: cat.id,
+                        child: Row(children: [
+                          const Icon(Icons.folder_rounded, size: 14, color: _amber),
+                          const SizedBox(width: 6),
+                          Text(cat.name, style: const TextStyle(color: _text, fontSize: 12)),
+                        ]))),
+                ],
+              ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COLUMN 3 — Live Status Log
+// ══════════════════════════════════════════════════════════════════════════════
+class _Col3LiveStatus extends StatelessWidget {
+  const _Col3LiveStatus();
+
+  @override
+  Widget build(BuildContext context) {
+    final prov = context.watch<AutomationProvider>();
+
+    // Derive status color
+    final statusColor = switch (prov.status) {
+      AutomationStatus.success   => _green,
+      AutomationStatus.error     => _red,
+      AutomationStatus.running   => _amber,
+      AutomationStatus.navigating => _accentL,
+      _ => _sub,
+    };
+    final statusLabel = switch (prov.status) {
+      AutomationStatus.success    => 'Success',
+      AutomationStatus.error      => 'Error',
+      AutomationStatus.running    => 'Running…',
+      AutomationStatus.navigating => 'Navigating…',
+      _ => 'Ready',
+    };
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: _surface,
+        border: Border(left: BorderSide(color: _divider)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // ── Column header ─────────────────────────────────────────────────
+        const _DashColHeader(icon: Icons.terminal_rounded, title: 'Live Status'),
+
+        // ── Overall progress card ─────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
+          child: _DashCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Text('AUTOMATION STATUS', style: _dashLabelStyle()),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: .1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: statusColor.withValues(alpha: .3)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Container(width: 6, height: 6,
+                      decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle)),
+                  const SizedBox(width: 5),
+                  Text(statusLabel,
+                      style: TextStyle(color: statusColor, fontSize: 10, fontWeight: FontWeight.w600)),
+                ]),
+              ),
+            ]),
+            const SizedBox(height: 10),
+
+            // Post URL being shared
+            if (prov.postUrl.isNotEmpty) ...[
+              Row(children: [
+                const Icon(Icons.link_rounded, color: _sub, size: 12),
+                const SizedBox(width: 5),
+                Expanded(child: Text(prov.postUrl,
+                    style: const TextStyle(color: _subL, fontSize: 10),
+                    maxLines: 1, overflow: TextOverflow.ellipsis)),
+              ]),
+              const SizedBox(height: 8),
+            ],
+
+            // Groups progress bar
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(
+                value: prov.isRunning ? null : (prov.groups.isNotEmpty ? 1.0 : 0.0),
+                backgroundColor: _border,
+                valueColor: AlwaysStoppedAnimation<Color>(
+                    prov.status == AutomationStatus.running ? _green : _accent),
+                minHeight: 8,
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            Row(children: [
+              _LiveStat(label: 'Groups', value: '${prov.groups.length}', color: _accentL),
+              const SizedBox(width: 14),
+              _LiveStat(label: 'Status', value: statusLabel, color: statusColor),
+              const SizedBox(width: 14),
+              _LiveStat(label: 'WebView', value: prov.webViewReady ? 'Ready' : 'Init…',
+                  color: prov.webViewReady ? _green : _sub),
+            ]),
+          ])),
+        ),
+
+        // ── Status message log header ─────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+          child: Row(children: [
+            Text('ACTIVITY LOG', style: _dashLabelStyle()),
+            const Spacer(),
+            if (prov.isRunning)
+              const Row(mainAxisSize: MainAxisSize.min, children: [
+                SizedBox(width: 6, height: 6,
+                  child: DecoratedBox(decoration: BoxDecoration(color: _green, shape: BoxShape.circle))),
+                SizedBox(width: 4),
+                Text('LIVE', style: TextStyle(color: _green, fontSize: 9, fontWeight: FontWeight.w700)),
+              ]),
+          ]),
+        ),
+
+        // ── Terminal log area ─────────────────────────────────────────────
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF080C14),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: _border),
+              ),
+              child: Column(children: [
+                // Title bar
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: _surface.withValues(alpha: .6),
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(11)),
+                    border: const Border(bottom: BorderSide(color: _border)),
+                  ),
+                  child: const Row(children: [
+                    _TermDot(color: _red),
+                    SizedBox(width: 5),
+                    _TermDot(color: _amber),
+                    SizedBox(width: 5),
+                    _TermDot(color: _green),
+                    SizedBox(width: 10),
+                    Text('fb_share_pro — automation.log',
+                        style: TextStyle(color: _sub, fontSize: 10, fontFamily: 'monospace')),
+                  ]),
+                ),
+                // Log entries — show statusMsg history
+                Expanded(
+                  child: _AutomationLogView(),
+                ),
+              ]),
+            ),
+          ),
+        ),
+
+        // ── Quick action buttons ──────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+          child: Row(children: [
+            Expanded(child: SizedBox(height: 34,
+              child: _DashAccentButton(
+                icon: Icons.open_in_browser_rounded,
+                label: 'Open Post',
+                onPressed: prov.webViewReady && prov.postUrl.isNotEmpty ? prov.navigateToPost : null,
+              ))),
+            const SizedBox(width: 8),
+            Expanded(child: SizedBox(height: 34,
+              child: _DashAccentButton(
+                icon: Icons.home_rounded,
+                label: 'FB Home',
+                color: _sub,
+                onPressed: prov.webViewReady ? prov.navigateHome : null,
+              ))),
+            const SizedBox(width: 8),
+            Expanded(child: SizedBox(height: 34,
+              child: _DashAccentButton(
+                icon: Icons.tune_rounded,
+                label: 'Settings',
+                color: const Color(0xFF7C3AED),
+                onPressed: () => showDialog(context: context,
+                    builder: (_) => _AutomationSettingsDialog(
+                        prov: context.read<AutomationProvider>())),
+              ))),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+// Live stat widget
+class _LiveStat extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+  const _LiveStat({required this.label, required this.value, required this.color});
+  @override
+  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    Text(value, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w700)),
+    Text(label, style: const TextStyle(color: _sub, fontSize: 9.5)),
+  ]);
+}
+
+// Terminal dot
+class _TermDot extends StatelessWidget {
+  final Color color;
+  const _TermDot({required this.color});
+  @override
+  Widget build(BuildContext context) =>
+      Container(width: 10, height: 10,
+          decoration: BoxDecoration(color: color.withValues(alpha: .6), shape: BoxShape.circle));
+}
+
+// Automation log view — keeps a rolling history of statusMsg
+class _AutomationLogView extends StatefulWidget {
+  @override
+  State<_AutomationLogView> createState() => _AutomationLogViewState();
+}
+
+class _AutomationLogViewState extends State<_AutomationLogView> {
+  final List<_LogLine> _lines = [];
+  String _lastMsg = '';
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final prov = context.watch<AutomationProvider>();
+    if (prov.statusMsg != _lastMsg) {
+      _lastMsg = prov.statusMsg;
+      final now = DateTime.now();
+      final ts = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+      final level = prov.status == AutomationStatus.success
+          ? _LogLevel.success
+          : prov.status == AutomationStatus.error
+              ? _LogLevel.error
+              : prov.status == AutomationStatus.running || prov.status == AutomationStatus.navigating
+                  ? _LogLevel.info
+                  : _LogLevel.muted;
+      _lines.insert(0, _LogLine(ts: ts, msg: prov.statusMsg, level: level));
+      if (_lines.length > 200) _lines.removeLast();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_lines.isEmpty) {
+      return const Center(child: Text(
+        '> Waiting for automation…\n> Select a post and sync groups.',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: Color(0xFF2A4A2A), fontSize: 11, fontFamily: 'monospace'),
+      ));
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.all(10),
+      itemCount: _lines.length,
+      itemBuilder: (_, i) {
+        final line = _lines[i];
+        final color = switch (line.level) {
+          _LogLevel.success => const Color(0xFF1ED760),
+          _LogLevel.error   => const Color(0xFFFF4757),
+          _LogLevel.info    => const Color(0xFF8899CC),
+          _LogLevel.muted   => const Color(0xFF3A5070),
+        };
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 3),
+          child: RichText(text: TextSpan(
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 11, height: 1.5),
+            children: [
+              TextSpan(text: '${line.ts} ', style: const TextStyle(color: Color(0xFF3A5070))),
+              const TextSpan(text: '— ', style: TextStyle(color: Color(0xFF2A3A55))),
+              TextSpan(text: line.msg, style: TextStyle(color: color)),
+            ],
+          )),
+        );
+      },
+    );
+  }
+}
+
+enum _LogLevel { success, error, info, muted }
+
+class _LogLine {
+  final String ts;
+  final String msg;
+  final _LogLevel level;
+  _LogLine({required this.ts, required this.msg, required this.level});
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Dashboard shared components (prefixed _Dash to avoid conflicts)
+// ══════════════════════════════════════════════════════════════════════════════
+
+TextStyle _dashLabelStyle() => const TextStyle(
+    color: Color(0xFF8A99C0), fontSize: 10.5, fontWeight: FontWeight.w600, letterSpacing: 1.1);
+
+class _DashColHeader extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final int? badge;
+  const _DashColHeader({required this.icon, required this.title, this.badge});
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+    decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _divider))),
+    child: Row(children: [
+      Container(
+        width: 28, height: 28,
+        decoration: BoxDecoration(color: _accent.withValues(alpha: .12), borderRadius: BorderRadius.circular(7)),
+        child: Icon(icon, color: _accentL, size: 15),
+      ),
+      const SizedBox(width: 8),
+      Text(title, style: const TextStyle(color: _text, fontSize: 13, fontWeight: FontWeight.w700)),
+      if (badge != null && badge! > 0) ...[
+        const SizedBox(width: 6),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+          decoration: BoxDecoration(color: _accent.withValues(alpha: .15), borderRadius: BorderRadius.circular(5)),
+          child: Text('$badge', style: const TextStyle(color: _accentL, fontSize: 10, fontWeight: FontWeight.w700)),
+        ),
+      ],
+    ]),
+  );
+}
+
+class _DashCard extends StatelessWidget {
+  final Widget child;
+  const _DashCard({required this.child});
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: _card,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: _border),
+      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .18), blurRadius: 8, offset: const Offset(0, 2))],
+    ),
+    child: child,
+  );
+}
+
+class _DashAccentButton extends StatefulWidget {
+  final IconData icon;
+  final String label;
+  final Color? color;
+  final VoidCallback? onPressed;
+  const _DashAccentButton({required this.icon, required this.label, this.color, required this.onPressed});
+  @override
+  State<_DashAccentButton> createState() => _DashAccentButtonState();
+}
+
+class _DashAccentButtonState extends State<_DashAccentButton> {
+  bool _hovered = false;
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onPressed != null;
+    final base = widget.color ?? _accent;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit:  (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onPressed,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 130),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: enabled ? (_hovered ? Color.lerp(base, Colors.white, .1)! : base) : _sub.withValues(alpha: .25),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
+            Icon(widget.icon, size: 13, color: Colors.white.withValues(alpha: enabled ? 1 : .4)),
+            const SizedBox(width: 5),
+            Flexible(child: Text(widget.label,
+              style: TextStyle(color: Colors.white.withValues(alpha: enabled ? 1 : .4), fontSize: 11, fontWeight: FontWeight.w600),
+              maxLines: 1, overflow: TextOverflow.ellipsis)),
+          ]),
+        ),
+      ),
+    );
   }
 }
 
@@ -785,140 +1557,7 @@ class _GroupCircleAvatar extends StatelessWidget {
   }
 }
 
-// ── Footer: post link + start sharing ─────────────────────────────────────────
-class _PageFooter extends StatelessWidget {
-  final AutomationProvider prov;
-  final TextEditingController postLinkCtrl;
-  const _PageFooter({required this.prov, required this.postLinkCtrl});
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-      decoration: const BoxDecoration(
-        color: _surface,
-        border: Border(top: BorderSide(color: _divider)),
-      ),
-      child: Row(
-        children: [
-          // Post link field
-          Expanded(
-            child: TextField(
-              controller: postLinkCtrl,
-              style: const TextStyle(color: _text, fontSize: 12),
-              onSubmitted: (v) {
-                prov.setPostUrl(v);
-                prov.startAutomation();
-              },
-              decoration: InputDecoration(
-                hintText: 'Paste Facebook post link to share…',
-                hintStyle:
-                    const TextStyle(color: _sub, fontSize: 11),
-                prefixIcon: const Icon(Icons.link_rounded,
-                    color: _sub, size: 16),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.content_paste_rounded,
-                      color: _sub, size: 14),
-                  onPressed: () async {
-                    final d =
-                        await Clipboard.getData('text/plain');
-                    if (d?.text != null) {
-                      postLinkCtrl.text = d!.text!;
-                    }
-                  },
-                ),
-                filled: true,
-                fillColor: _card,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 11),
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(9),
-                    borderSide:
-                        const BorderSide(color: _border)),
-                enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(9),
-                    borderSide:
-                        const BorderSide(color: _border)),
-                focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(9),
-                    borderSide: const BorderSide(
-                        color: _accent, width: 1.5)),
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-
-          // Navigate button
-          _IconBtn(
-            icon: Icons.open_in_browser_rounded,
-            tooltip: 'Navigate to post',
-            onTap: prov.webViewReady
-                ? () {
-                    prov.setPostUrl(postLinkCtrl.text);
-                    prov.navigateToPost();
-                  }
-                : null,
-          ),
-          const SizedBox(width: 8),
-
-          // Start Sharing button
-          ElevatedButton.icon(
-            onPressed:
-                prov.webViewReady && !prov.isRunning && prov.groups.isNotEmpty
-                    ? () {
-                        prov.setPostUrl(postLinkCtrl.text);
-                        prov.startAutomation();
-                      }
-                    : null,
-            icon: prov.isRunning
-                ? const SizedBox(
-                    width: 13, height: 13,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 1.8, color: Colors.white))
-                : const Icon(Icons.play_arrow_rounded, size: 16),
-            label: Text(
-                prov.isRunning ? 'Running…' : 'Start Sharing'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _green,
-              foregroundColor: Colors.white,
-              disabledBackgroundColor: _card,
-              disabledForegroundColor: _sub,
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 18, vertical: 11),
-              textStyle: const TextStyle(
-                  fontSize: 12.5, fontWeight: FontWeight.w700),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(9)),
-              elevation: 0,
-            ),
-          ),
-
-          // Stop button (only when running)
-          if (prov.isRunning) ...[
-            const SizedBox(width: 8),
-            ElevatedButton.icon(
-              onPressed: prov.stopAutomation,
-              icon: const Icon(Icons.stop_rounded, size: 15),
-              label: const Text('Stop'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _red,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 11),
-                textStyle: const TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w600),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(9)),
-                elevation: 0,
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
 
 // ── Automation settings dialog ─────────────────────────────────────────────────
 class _AutomationSettingsDialog extends StatefulWidget {
@@ -1067,65 +1706,6 @@ class _GroupsEmptyState extends StatelessWidget {
   }
 }
 
-// ── Error banner ───────────────────────────────────────────────────────────────
-class _ErrorBanner extends StatelessWidget {
-  final String message;
-  const _ErrorBanner({required this.message});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      decoration: BoxDecoration(
-        color: _red.withValues(alpha: .08),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _red.withValues(alpha: .25)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.error_outline_rounded,
-              color: _red, size: 14),
-          const SizedBox(width: 8),
-          Expanded(
-              child: Text(message,
-                  style: const TextStyle(
-                      color: _red, fontSize: 10.5, height: 1.4))),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Small icon button ──────────────────────────────────────────────────────────
-class _IconBtn extends StatelessWidget {
-  final IconData icon;
-  final String? tooltip;
-  final VoidCallback? onTap;
-  const _IconBtn({required this.icon, this.tooltip, this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip ?? '',
-      child: Material(
-        color: _card,
-        borderRadius: BorderRadius.circular(9),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(9),
-          onTap: onTap,
-          child: Container(
-            width: 38, height: 38,
-            alignment: Alignment.center,
-            child: Icon(icon,
-                size: 16,
-                color: onTap != null ? _subL : _sub),
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Follow-up Page  (index 1) — Coming Soon placeholder

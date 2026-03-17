@@ -44,10 +44,14 @@ class FBGroup {
   const FBGroup({
     required this.name,
     required this.index,
-    this.imageUrl = '',
-    this.url      = '',
-    this.groupId  = '',
+    this.imageUrl  = '',
+    this.url       = '',
+    this.groupId   = '',
+    this.categoryId = '',
   });
+
+  /// Category this group belongs to. '' = Uncategorized.
+  final String categoryId;
 
   /// Extract a short group ID from a Facebook group URL.
   /// https://www.facebook.com/groups/1234567890/ → "1234567890"
@@ -63,31 +67,65 @@ class FBGroup {
 
   /// Returns a copy with a new URL (and auto-computed groupId).
   FBGroup withUrl(String newUrl) => FBGroup(
-    name:     name,
-    index:    index,
-    imageUrl: imageUrl,
-    url:      newUrl,
-    groupId:  extractGroupId(newUrl),
+    name:       name,
+    index:      index,
+    imageUrl:   imageUrl,
+    url:        newUrl,
+    groupId:    extractGroupId(newUrl),
+    categoryId: categoryId,
+  );
+
+  /// Returns a copy with a new categoryId.
+  FBGroup withCategory(String newCategoryId) => FBGroup(
+    name:       name,
+    index:      index,
+    imageUrl:   imageUrl,
+    url:        url,
+    groupId:    groupId,
+    categoryId: newCategoryId,
   );
 
   Map<String, dynamic> toJson() => {
-        'name':     name,
-        'index':    index,
-        'imageUrl': imageUrl,
-        'url':      url,
-        'groupId':  groupId,
+        'name':       name,
+        'index':      index,
+        'imageUrl':   imageUrl,
+        'url':        url,
+        'groupId':    groupId,
+        'categoryId': categoryId,
       };
 
   factory FBGroup.fromJson(Map<String, dynamic> j) {
     final url = j['url'] as String? ?? '';
     return FBGroup(
-      name:     j['name']     as String? ?? 'Unknown Group',
-      index:    (j['index']   as num?  )?.toInt() ?? -1,
-      imageUrl: j['imageUrl'] as String? ?? '',
-      url:      url,
-      groupId:  j['groupId']  as String? ?? FBGroup.extractGroupId(url),
+      name:       j['name']       as String? ?? 'Unknown Group',
+      index:      (j['index']     as num?  )?.toInt() ?? -1,
+      imageUrl:   j['imageUrl']   as String? ?? '',
+      url:        url,
+      groupId:    j['groupId']    as String? ?? FBGroup.extractGroupId(url),
+      categoryId: j['categoryId'] as String? ?? '',
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GroupCategory model
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A named folder for organizing FBGroups.
+/// Each group belongs to at most ONE category (categoryId '' = Uncategorized).
+class GroupCategory {
+  final String id;
+  final String name;
+  bool isExpanded;
+
+  GroupCategory({required this.id, required this.name, this.isExpanded = true});
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name};
+
+  factory GroupCategory.fromJson(Map<String, dynamic> j) => GroupCategory(
+        id:   j['id']   as String? ?? DateTime.now().millisecondsSinceEpoch.toString(),
+        name: j['name'] as String? ?? 'Category',
+      );
 }
 
 /// A saved Facebook post link with its original URL and a desktop-safe embed URL.
@@ -493,6 +531,52 @@ class AutomationProvider extends ChangeNotifier {
   bool _groupsFetching = false;
   String? _groupsError;
 
+  // ── Categories ─────────────────────────────────────────────────────────────
+  final List<GroupCategory> _categories = [];
+
+  List<GroupCategory> get categories => List.unmodifiable(_categories);
+
+  List<FBGroup> groupsForCategory(String categoryId) =>
+      _groups.where((g) => g.categoryId == categoryId).toList();
+
+  void addCategory(String name) {
+    if (name.trim().isEmpty) return;
+    _categories.add(GroupCategory(
+      id:   DateTime.now().millisecondsSinceEpoch.toString(),
+      name: name.trim(),
+    ));
+    _savePrefs();
+    notifyListeners();
+  }
+
+  void removeCategory(String id) {
+    // Move all groups in this category back to Uncategorized
+    for (int i = 0; i < _groups.length; i++) {
+      if (_groups[i].categoryId == id) {
+        _groups[i] = _groups[i].withCategory('');
+      }
+    }
+    _categories.removeWhere((c) => c.id == id);
+    _savePrefs();
+    notifyListeners();
+  }
+
+  void toggleCategoryExpanded(String id) {
+    final idx = _categories.indexWhere((c) => c.id == id);
+    if (idx == -1) return;
+    _categories[idx].isExpanded = !_categories[idx].isExpanded;
+    notifyListeners();
+  }
+
+  /// Move a group to a category. Pass '' for Uncategorized.
+  void moveGroupToCategory(String groupName, String categoryId) {
+    final idx = _groups.indexWhere((g) => g.name == groupName);
+    if (idx == -1) return;
+    _groups[idx] = _groups[idx].withCategory(categoryId);
+    _savePrefs();
+    notifyListeners();
+  }
+
   // Sync progress state
   bool _isSyncing    = false;
   int  _groupsFound  = 0;
@@ -515,10 +599,11 @@ class AutomationProvider extends ChangeNotifier {
   String        get highlightedGroup => _highlightedGroup;
 
   // ── Prefs keys ─────────────────────────────────────────────────────────────
-  static const _kUrl    = 'fb_post_url';
-  static const _kPages  = 'fb_pages_list';
-  static const _kItems  = 'fb_items_list';
-  static const _kGroups = 'fb_groups_list';
+  static const _kUrl        = 'fb_post_url';
+  static const _kPages      = 'fb_pages_list';
+  static const _kItems      = 'fb_items_list';
+  static const _kGroups     = 'fb_groups_list';
+  static const _kCategories = 'fb_categories_list';
 
   AutomationProvider() { _loadPrefs(); }
 
@@ -573,15 +658,24 @@ class AutomationProvider extends ChangeNotifier {
       } catch (_) {}
     }
 
+    final rawCats = prefs.getString(_kCategories);
+    if (rawCats != null) {
+      try {
+        final list = jsonDecode(rawCats) as List<dynamic>;
+        _categories.addAll(list.map((e) => GroupCategory.fromJson(Map<String, dynamic>.from(e as Map))));
+      } catch (_) {}
+    }
+
     notifyListeners();
   }
 
   Future<void> _savePrefs() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kUrl,    _postUrl);
-    await prefs.setString(_kPages,  jsonEncode(_pages.map((p)  => p.toJson()).toList()));
-    await prefs.setString(_kItems,  jsonEncode(_items.map((i)  => i.toJson()).toList()));
-    await prefs.setString(_kGroups, jsonEncode(_groups.map((g) => g.toJson()).toList()));
+    await prefs.setString(_kUrl,        _postUrl);
+    await prefs.setString(_kPages,      jsonEncode(_pages.map((p)  => p.toJson()).toList()));
+    await prefs.setString(_kItems,      jsonEncode(_items.map((i)  => i.toJson()).toList()));
+    await prefs.setString(_kGroups,     jsonEncode(_groups.map((g) => g.toJson()).toList()));
+    await prefs.setString(_kCategories, jsonEncode(_categories.map((c) => c.toJson()).toList()));
   }
 
   void setPostUrl(String url) {
@@ -886,6 +980,10 @@ class AutomationProvider extends ChangeNotifier {
     await prefs.setString(
       _kGroups,
       jsonEncode(_groups.map((g) => g.toJson()).toList()),
+    );
+    await prefs.setString(
+      _kCategories,
+      jsonEncode(_categories.map((c) => c.toJson()).toList()),
     );
   }
 

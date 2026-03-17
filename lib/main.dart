@@ -20,13 +20,13 @@ class FbShareApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'FB Share Automation',
+      title: 'FB Share Pro',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF121212),
+        scaffoldBackgroundColor: const Color(0xFF0D0F14),
         colorScheme: const ColorScheme.dark(
-          surface:   Color(0xFF1E1E1E),
-          primary:   Color(0xFF2979FF),
+          surface:   Color(0xFF141720),
+          primary:   Color(0xFF1877F2),
           secondary: Color(0xFF448AFF),
         ),
       ),
