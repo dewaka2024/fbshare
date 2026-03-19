@@ -319,7 +319,7 @@ class _PhoneTopChrome extends StatelessWidget {
         children: [
           // ── Notch row ─────────────────────────────────────────────────────
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
             child: Row(
               children: [
                 // Status bar time placeholder

@@ -1,11 +1,11 @@
 // lib/providers/automation_provider.dart
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_windows/webview_windows.dart';
 
@@ -218,77 +218,31 @@ class FBItem {
 // WebEnvironmentManager
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Two isolated WebView2 browser processes via distinct userDataPaths:
-//
-//  mobileEnv  (.../webview_mobile)   --user-agent="<Galaxy S23 UA>"
-//    → Facebook server sees mobile UA → serves mobile layout
-//    → Used by: main automation WebView
-//
-//  desktopEnv (.../webview_desktop)  (default Chromium UA)
-//    → facebook.com/plugins/post.php serves the proper embed iframe
-//    → Used by: embed cards, share popup dialog
+// WebView2 environment is initialized ONCE in main() before runApp().
+// This manager simply creates controllers from that single shared environment.
+// The mobile UA is already baked into the environment via main()'s
+// --user-agent argument, so all controllers automatically use it.
 //
 class WebEnvironmentManager {
   WebEnvironmentManager._();
   static final WebEnvironmentManager instance = WebEnvironmentManager._();
-
-  bool _mobileReady  = false;
-  bool _desktopReady = false;
-
-  Completer<void>? _mobileCompleter;
-  Completer<void>? _desktopCompleter;
 
   static const String mobileUA =
       'Mozilla/5.0 (Linux; Android 13; SM-S911B) '
       'AppleWebKit/537.36 (KHTML, like Gecko) '
       'Chrome/116.0.0.0 Mobile Safari/537.36';
 
-  Future<void> ensureMobileEnv() async {
-    if (_mobileReady) return;
-    if (_mobileCompleter != null) return _mobileCompleter!.future;
-    _mobileCompleter = Completer<void>();
-    try {
-      final appSupport = await getApplicationSupportDirectory();
-      await WebviewController.initializeEnvironment(
-        userDataPath: '${appSupport.path}\\webview_mobile',
-        additionalArguments: '--user-agent="$mobileUA"',
-      );
-      _mobileReady = true;
-      _mobileCompleter!.complete();
-    } catch (e) {
-      _mobileCompleter!.completeError(e);
-      _mobileCompleter = null;
-      rethrow;
-    }
-  }
-
-  Future<void> ensureDesktopEnv() async {
-    if (_desktopReady) return;
-    if (_desktopCompleter != null) return _desktopCompleter!.future;
-    _desktopCompleter = Completer<void>();
-    try {
-      final appSupport = await getApplicationSupportDirectory();
-      await WebviewController.initializeEnvironment(
-        userDataPath: '${appSupport.path}\\webview_desktop',
-      );
-      _desktopReady = true;
-      _desktopCompleter!.complete();
-    } catch (e) {
-      _desktopCompleter!.completeError(e);
-      _desktopCompleter = null;
-      rethrow;
-    }
-  }
+  // No-op — environment is initialized in main() already.
+  Future<void> ensureMobileEnv()  async {}
+  Future<void> ensureDesktopEnv() async {}
 
   Future<WebviewController> createMobileController() async {
-    assert(_mobileReady);
     final ctrl = WebviewController();
     await ctrl.initialize();
     return ctrl;
   }
 
   Future<WebviewController> createDesktopController() async {
-    assert(_desktopReady);
     final ctrl = WebviewController();
     await ctrl.initialize();
     return ctrl;
@@ -1452,7 +1406,7 @@ class AutomationProvider extends ChangeNotifier {
 
   // ── Link Library: Add / Remove ─────────────────────────────────────────────
 
-  // addItem: URL + optional manual title/description — no scraping needed.
+  // addItem: saves URL immediately, then fetches OG meta via HTTP in background.
   Future<void> addItem(String url, {String manualTitle = '', String manualDesc = ''}) async {
     final trimmed = url.trim();
     if (trimmed.isEmpty) return;
@@ -1468,10 +1422,109 @@ class AutomationProvider extends ChangeNotifier {
       );
     }
 
+    // Insert immediately — tile appears right away
     _items.insert(0, item);
     await _savePrefs();
     notifyListeners();
+
+    // Fetch OG meta in background without disturbing the WebView session
+    _fetchOgMeta(item.id, trimmed);
   }
+
+  /// Fetches OG meta (title + image) directly via HTTP without navigating
+  /// the WebView. Parses <meta property="og:..."> tags from the raw HTML.
+  /// Fire-and-forget — errors are silently logged.
+  Future<void> _fetchOgMeta(String itemId, String rawUrl) async {
+    try {
+      final url = toAutomationUrl(rawUrl);
+
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 12);
+      // Use a desktop UA so Facebook's server returns a crawlable HTML page
+      // (mobile UA often returns a JS-only shell with no OG tags)
+      final request = await client.getUrl(Uri.parse(url));
+      request.headers.set(HttpHeaders.userAgentHeader,
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+          'AppleWebKit/537.36 (KHTML, like Gecko) '
+          'Chrome/120.0.0.0 Safari/537.36');
+      request.headers.set(HttpHeaders.acceptHeader,
+          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
+      request.headers.set(HttpHeaders.acceptLanguageHeader, 'en-US,en;q=0.9');
+
+      final response = await request.close()
+          .timeout(const Duration(seconds: 12));
+      client.close();
+
+      if (response.statusCode != 200) return;
+
+      final bytes   = await response.fold<List<int>>(
+          [], (prev, chunk) => prev..addAll(chunk));
+      final html    = String.fromCharCodes(bytes);
+
+      final title = _extractOgTag(html, 'og:title') ??
+                    _extractOgTag(html, 'twitter:title') ??
+                    _extractTitleTag(html) ?? '';
+      final image = _extractOgTag(html, 'og:image') ??
+                    _extractOgTag(html, 'twitter:image') ?? '';
+
+      final idx = _items.indexWhere((i) => i.id == itemId);
+      if (idx == -1) return;
+      if (title.isEmpty && image.isEmpty) return;
+
+      _items[idx] = _items[idx].withMeta(
+        title:       title.isNotEmpty ? title : _items[idx].ogTitle,
+        description: _items[idx].ogDescription,
+        image:       image,
+      );
+      await _savePrefs();
+      notifyListeners();
+      debugPrint('[_fetchOgMeta] ✅ title="$title" image="${image.length > 40 ? '${image.substring(0,40)}…' : image}"');
+    } catch (e) {
+      debugPrint('[_fetchOgMeta] error: $e');
+    }
+  }
+
+  /// Extracts content of a <meta property="NAME"> or <meta name="NAME"> tag.
+  static String? _extractOgTag(String html, String property) {
+    // Match both property= and name= variants, single and double quotes
+    final patterns = [
+      RegExp('<meta[^>]+property=["\']${RegExp.escape(property)}["\'][^>]+content=["\'](.*?)["\']',
+          caseSensitive: false, dotAll: true),
+      RegExp('<meta[^>]+content=["\'](.*?)["\'][^>]+property=["\']${RegExp.escape(property)}["\']',
+          caseSensitive: false, dotAll: true),
+      RegExp('<meta[^>]+name=["\']${RegExp.escape(property)}["\'][^>]+content=["\'](.*?)["\']',
+          caseSensitive: false, dotAll: true),
+    ];
+    for (final re in patterns) {
+      final m = re.firstMatch(html);
+      if (m != null) {
+        final val = _htmlDecode(m.group(1) ?? '').trim();
+        if (val.isNotEmpty) return val;
+      }
+    }
+    return null;
+  }
+
+  static String? _extractTitleTag(String html) {
+    final m = RegExp('<title[^>]*>(.*?)</title>', caseSensitive: false, dotAll: true)
+        .firstMatch(html);
+    if (m == null) return null;
+    final t = _htmlDecode(m.group(1) ?? '').trim();
+    // Strip " | Facebook" suffix
+    return t.replaceAll(RegExp(r'\s*[|\-–]\s*Facebook\s*$', caseSensitive: false), '').trim();
+  }
+
+  static String _htmlDecode(String s) => s
+      .replaceAll('&amp;',  '&')
+      .replaceAll('&lt;',   '<')
+      .replaceAll('&gt;',   '>')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;',  "'")
+      .replaceAll('&apos;', "'")
+      .replaceAllMapped(RegExp(r'&#(\d+);'), (m) {
+        final code = int.tryParse(m.group(1) ?? '');
+        return code != null ? String.fromCharCode(code) : m.group(0)!;
+      });
 
   EmbedCardController? controllerFor(String itemId) => _embedControllers[itemId];
 

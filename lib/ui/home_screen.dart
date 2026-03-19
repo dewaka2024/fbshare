@@ -338,15 +338,17 @@ class _Col1PostRepository extends StatefulWidget {
 
 class _Col1PostRepositoryState extends State<_Col1PostRepository> {
   final _urlCtrl   = TextEditingController();
+  final _nameCtrl  = TextEditingController();
   final _descCtrl  = TextEditingController();
   final _urlFocus  = FocusNode();
+  final _nameFocus = FocusNode();
   final _descFocus = FocusNode();
   bool _adding = false;
 
   @override
   void dispose() {
-    _urlCtrl.dispose(); _descCtrl.dispose();
-    _urlFocus.dispose(); _descFocus.dispose();
+    _urlCtrl.dispose(); _nameCtrl.dispose(); _descCtrl.dispose();
+    _urlFocus.dispose(); _nameFocus.dispose(); _descFocus.dispose();
     super.dispose();
   }
 
@@ -354,8 +356,10 @@ class _Col1PostRepositoryState extends State<_Col1PostRepository> {
     final url = _urlCtrl.text.trim();
     if (url.isEmpty || _adding) return;
     setState(() => _adding = true);
-    _urlCtrl.clear(); _descCtrl.clear();
-    await prov.addItem(url, manualDesc: _descCtrl.text.trim());
+    final savedDesc = _descCtrl.text.trim();
+    final savedName = _nameCtrl.text.trim();
+    _urlCtrl.clear(); _nameCtrl.clear(); _descCtrl.clear();
+    await prov.addItem(url, manualTitle: savedName, manualDesc: savedDesc);
     if (mounted) setState(() => _adding = false);
     _urlFocus.requestFocus();
   }
@@ -382,13 +386,30 @@ class _Col1PostRepositoryState extends State<_Col1PostRepository> {
               Text('ADD NEW LINK', style: _dashLabelStyle()),
             ]),
             const SizedBox(height: 9),
-            _ThemedTextField(controller: _urlCtrl, hint: 'https://facebook.com/…',
-                prefixIcon: Icons.link_rounded, showPaste: true,
-                onSubmitted: (_) => _descFocus.requestFocus()),
+            _ThemedTextField(
+              controller: _urlCtrl,
+              focusNode: _urlFocus,
+              hint: 'https://facebook.com/…',
+              prefixIcon: Icons.link_rounded,
+              showPaste: true,
+              onSubmitted: (_) => _nameFocus.requestFocus(),
+            ),
             const SizedBox(height: 7),
-            _ThemedTextField(controller: _descCtrl, hint: 'Label / note (optional)',
-                prefixIcon: Icons.notes_rounded,
-                onSubmitted: (_) => _save(prov)),
+            _ThemedTextField(
+              controller: _nameCtrl,
+              focusNode: _nameFocus,
+              hint: 'Post name / title',
+              prefixIcon: Icons.title_rounded,
+              onSubmitted: (_) => _descFocus.requestFocus(),
+            ),
+            const SizedBox(height: 7),
+            _ThemedTextField(
+              controller: _descCtrl,
+              focusNode: _descFocus,
+              hint: 'Description (optional)',
+              prefixIcon: Icons.notes_rounded,
+              onSubmitted: (_) => _save(prov),
+            ),
             const SizedBox(height: 9),
             SizedBox(
               width: double.infinity, height: 36,
@@ -462,6 +483,13 @@ class _PostRepositoryTile extends StatefulWidget {
 class _PostRepositoryTileState extends State<_PostRepositoryTile> {
   bool _hovered = false;
 
+  // Pick a consistent accent color per post based on id hash
+  Color get _iconColor {
+    final colors = [_accent, const Color(0xFF7C3AED), const Color(0xFF0EA5E9),
+                    _green, const Color(0xFFEC4899), _amber];
+    return colors[widget.item.id.hashCode.abs() % colors.length];
+  }
+
   String get _displayName {
     if (widget.item.ogTitle.isNotEmpty) return widget.item.ogTitle;
     final uri = Uri.tryParse(widget.item.originalUrl);
@@ -472,9 +500,19 @@ class _PostRepositoryTileState extends State<_PostRepositoryTile> {
     return widget.item.originalUrl;
   }
 
+  String get _shortUrl {
+    final uri = Uri.tryParse(widget.item.originalUrl);
+    if (uri == null) return widget.item.originalUrl;
+    final path = uri.path.length > 28 ? '${uri.path.substring(0, 28)}…' : uri.path;
+    return '${uri.host}$path';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final sel = widget.isSelected;
+    final sel  = widget.isSelected;
+    final item = widget.item;
+    final c    = _iconColor;
+
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit:  (_) => setState(() => _hovered = false),
@@ -482,44 +520,106 @@ class _PostRepositoryTileState extends State<_PostRepositoryTile> {
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
-          margin: const EdgeInsets.only(bottom: 6),
-          padding: const EdgeInsets.all(10),
+          margin: const EdgeInsets.only(bottom: 7),
+          padding: const EdgeInsets.all(11),
           decoration: BoxDecoration(
-            color: sel ? _accent.withValues(alpha: .15) : (_hovered ? _cardHov : _card),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: sel ? _accent.withValues(alpha: .5) : _border),
-          ),
-          child: Row(children: [
-            Container(
-              width: 30, height: 30,
-              decoration: BoxDecoration(
-                color: sel ? _accent.withValues(alpha: .2) : _surface,
-                borderRadius: BorderRadius.circular(7),
-              ),
-              child: Icon(Icons.article_rounded, size: 15, color: sel ? _accentL : _sub),
+            color: sel ? c.withValues(alpha: .12) : (_hovered ? _cardHov : _card),
+            borderRadius: BorderRadius.circular(11),
+            border: Border.all(
+              color: sel ? c.withValues(alpha: .55) : (_hovered ? c.withValues(alpha: .25) : _border),
+              width: sel ? 1.5 : 1,
             ),
-            const SizedBox(width: 8),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(_displayName,
-                style: TextStyle(color: sel ? _text : _subL, fontSize: 12, fontWeight: FontWeight.w600),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-              const SizedBox(height: 2),
-              Text(widget.item.originalUrl,
-                style: const TextStyle(color: _sub, fontSize: 9.5),
-                maxLines: 1, overflow: TextOverflow.ellipsis),
-            ])),
-            if (sel) const Icon(Icons.check_circle_rounded, color: _accentL, size: 14),
-            if (_hovered && !sel)
-              GestureDetector(onTap: widget.onDelete,
-                child: const Icon(Icons.close_rounded, color: _sub, size: 14)),
+          ),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // ── Icon box ─────────────────────────────────────────────────
+            Container(
+              width: 38, height: 38,
+              decoration: BoxDecoration(
+                color: c.withValues(alpha: sel ? .22 : .13),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(Icons.article_rounded, size: 18, color: c),
+            ),
+            const SizedBox(width: 10),
+
+            // ── Text content ──────────────────────────────────────────────
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                // Name / title
+                Text(
+                  _displayName,
+                  style: TextStyle(
+                    color: sel ? _text : _subL,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    height: 1.2,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                // Description
+                if (item.ogDescription.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    item.ogDescription,
+                    style: TextStyle(
+                      color: sel ? _subL : _sub,
+                      fontSize: 10.5,
+                      height: 1.35,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+                const SizedBox(height: 5),
+                // URL chip
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: _surface,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: _border),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text(
+                      'f',
+                      style: TextStyle(
+                        color: c,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        _shortUrl,
+                        style: const TextStyle(color: _sub, fontSize: 9.5),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ]),
+                ),
+              ]),
+            ),
+
+            // ── Right actions ─────────────────────────────────────────────
+            const SizedBox(width: 4),
+            Column(children: [
+              if (sel)
+                Icon(Icons.check_circle_rounded, color: c, size: 15)
+              else if (_hovered)
+                GestureDetector(
+                  onTap: widget.onDelete,
+                  child: const Icon(Icons.close_rounded, color: _sub, size: 15),
+                ),
+            ]),
           ]),
         ),
       ),
     );
   }
 }
-
-// Start Sharing / Stop button
 class _StartSharingButton extends StatefulWidget {
   @override
   State<_StartSharingButton> createState() => _StartSharingButtonState();
@@ -1540,19 +1640,10 @@ class _GroupCircleAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const double r = 20;
-    if (imageUrl.isEmpty) {
-      return CircleAvatar(
-        radius: r,
-        backgroundColor: _accent.withValues(alpha: .12),
-        child: const Icon(Icons.group_rounded, color: _accentL, size: 18),
-      );
-    }
     return CircleAvatar(
-      radius: r,
-      backgroundColor: _border,
-      backgroundImage: NetworkImage(imageUrl),
-      onBackgroundImageError: (_, __) {},
+      radius: 20,
+      backgroundColor: _accent.withValues(alpha: .12),
+      child: const Icon(Icons.group_rounded, color: _accentL, size: 18),
     );
   }
 }
@@ -2915,13 +3006,15 @@ class _ThemedTextField extends StatelessWidget {
   final String hint;
   final IconData prefixIcon;
   final bool showPaste;
+  final FocusNode? focusNode;
   final ValueChanged<String>? onSubmitted;
-  const _ThemedTextField({required this.controller, required this.hint, required this.prefixIcon, this.showPaste = false, this.onSubmitted});
+  const _ThemedTextField({required this.controller, required this.hint, required this.prefixIcon, this.showPaste = false, this.focusNode, this.onSubmitted});
 
   @override
   Widget build(BuildContext context) {
     return TextField(
       controller: controller,
+      focusNode: focusNode,
       onSubmitted: onSubmitted,
       style: const TextStyle(color: _text, fontSize: 11.5),
       decoration: InputDecoration(
