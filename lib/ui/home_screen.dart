@@ -1349,6 +1349,8 @@ class _Col3LiveStatus extends StatelessWidget {
               _LiveStat(label: 'WebView', value: prov.webViewReady ? 'Ready' : 'Init…',
                   color: prov.webViewReady ? _green : _sub),
             ]),
+            const SizedBox(height: 8),
+            const _NetworkIndicator(),
           ])),
         ),
 
@@ -1443,6 +1445,69 @@ class _Col3LiveStatus extends StatelessWidget {
 }
 
 // Live stat widget
+// ── Network Status Indicator ──────────────────────────────────────────────────
+class _NetworkIndicator extends StatelessWidget {
+  const _NetworkIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    final prov = context.watch<AutomationProvider>();
+    final ping = prov.pingMs;
+
+    final Color dotColor;
+    final String label;
+    final String pingText;
+
+    if (ping == null) {
+      dotColor = _sub;
+      label    = 'Checking…';
+      pingText = '';
+    } else if (ping == -1) {
+      dotColor = _red;
+      label    = 'Offline';
+      pingText = '';
+    } else if (ping > 800) {
+      dotColor = _amber;
+      label    = 'Slow Network';
+      pingText = '${ping}ms';
+    } else {
+      dotColor = _green;
+      label    = 'Connected';
+      pingText = '${ping}ms';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: dotColor.withValues(alpha: .08),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: dotColor.withValues(alpha: .25)),
+      ),
+      child: Row(children: [
+        // Animated dot
+        Container(
+          width: 7, height: 7,
+          decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 6),
+        const Text('NETWORK', style: TextStyle(color: _sub, fontSize: 9, fontWeight: FontWeight.w600)),
+        const SizedBox(width: 6),
+        Text(label, style: TextStyle(color: dotColor, fontSize: 10, fontWeight: FontWeight.w700)),
+        if (pingText.isNotEmpty) ...[ 
+          const SizedBox(width: 6),
+          Text(pingText, style: const TextStyle(color: _sub, fontSize: 9)),
+        ],
+        const Spacer(),
+        // Manual refresh button
+        GestureDetector(
+          onTap: () => prov.checkNetworkNow(),
+          child: const Icon(Icons.refresh_rounded, size: 13, color: _sub),
+        ),
+      ]),
+    );
+  }
+}
+
 class _LiveStat extends StatelessWidget {
   final String label;
   final String value;
@@ -1640,10 +1705,19 @@ class _GroupCircleAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const double r = 20;
+    if (imageUrl.isEmpty) {
+      return CircleAvatar(
+        radius: r,
+        backgroundColor: _accent.withValues(alpha: .12),
+        child: const Icon(Icons.group_rounded, color: _accentL, size: 18),
+      );
+    }
     return CircleAvatar(
-      radius: 20,
-      backgroundColor: _accent.withValues(alpha: .12),
-      child: const Icon(Icons.group_rounded, color: _accentL, size: 18),
+      radius: r,
+      backgroundColor: _border,
+      backgroundImage: NetworkImage(imageUrl),
+      onBackgroundImageError: (_, __) {},
     );
   }
 }

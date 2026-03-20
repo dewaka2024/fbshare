@@ -559,7 +559,56 @@ class AutomationProvider extends ChangeNotifier {
   static const _kGroups     = 'fb_groups_list';
   static const _kCategories = 'fb_categories_list';
 
-  AutomationProvider() { _loadPrefs(); }
+  AutomationProvider() {
+    _loadPrefs();
+    _startNetworkMonitor();
+  }
+
+  // ── Network Monitor ───────────────────────────────────────────────────────
+  Timer?  _netTimer;
+  int?    _pingMs;        // null = unknown, -1 = offline
+  bool    _netChecking = false;
+
+  int?  get pingMs       => _pingMs;
+  bool  get netOffline   => _pingMs == -1;
+  bool  get netSlow      => _pingMs != null && _pingMs! >= 0 && _pingMs! > 800;
+  bool  get netOk        => _pingMs != null && _pingMs! >= 0 && _pingMs! <= 800;
+
+  void _startNetworkMonitor() {
+    _checkNetwork();
+    _netTimer = Timer.periodic(const Duration(seconds: 15), (_) => _checkNetwork());
+  }
+
+  /// Public method — called from UI refresh button
+  void checkNetworkNow() { _checkNetwork(); }
+
+  Future<void> _checkNetwork() async {
+    if (_netChecking) return;
+    _netChecking = true;
+    try {
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 6);
+      final sw = Stopwatch()..start();
+      final req = await client.getUrl(Uri.parse('https://www.facebook.com/'));
+      req.headers.set('User-Agent', 'Mozilla/5.0');
+      final res = await req.close().timeout(const Duration(seconds: 6));
+      sw.stop();
+      await res.drain<void>();
+      client.close();
+      final ms = sw.elapsedMilliseconds;
+      if (_pingMs != ms) {
+        _pingMs = ms;
+        notifyListeners();
+      }
+    } catch (_) {
+      if (_pingMs != -1) {
+        _pingMs = -1;
+        notifyListeners();
+      }
+    } finally {
+      _netChecking = false;
+    }
+  }
 
   // ── URL helpers ────────────────────────────────────────────────────────────
 
@@ -688,22 +737,48 @@ class AutomationProvider extends ChangeNotifier {
 (function(){
   if(window.__fbBannerHider) return;
   window.__fbBannerHider = true;
-  function hideBanners() {
-    ['[data-testid="open_app_banner"]','[data-testid="msite-open-app-banner"]','.smartbanner','#smartbanner'].forEach(function(s){
-      try { document.querySelectorAll(s).forEach(function(el){ el.style.setProperty('display','none','important'); }); } catch(_){}
-    });
-    document.querySelectorAll('div,section,aside,footer').forEach(function(el){
-      try {
-        var cs = window.getComputedStyle(el);
-        if(cs.position!=='fixed'&&cs.position!=='sticky') return;
-        var txt=(el.innerText||'').toLowerCase();
-        if(txt.indexOf('open app')!==-1||txt.indexOf('install')!==-1||txt.indexOf("isn't supported")!==-1||txt.indexOf('not supported')!==-1)
-          el.style.setProperty('display','none','important');
-      } catch(_){}
+
+  // CSS injection — fires before DOM renders.
+  // Targets ONLY elements that have BOTH "fixed-container" AND "bottom" classes
+  // exactly as in class="m fixed-container bottom".
+  (function injectCSS(){
+    try {
+      var style = document.createElement('style');
+      style.id = '__fb_banner_hide';
+      style.textContent =
+        '.fixed-container.bottom { display: none !important; }';
+      (document.head || document.documentElement).appendChild(style);
+    } catch(_) {}
+  })();
+
+  // MutationObserver — removes the element from the DOM entirely
+  // whenever it appears (even if React re-injects it).
+  function removeOpenAppBanner() {
+    document.querySelectorAll('.fixed-container.bottom').forEach(function(el){
+      try { el.parentNode && el.parentNode.removeChild(el); } catch(_) {}
     });
   }
-  hideBanners(); setTimeout(hideBanners,800); setTimeout(hideBanners,2000);
-  new MutationObserver(hideBanners).observe(document.documentElement,{childList:true,subtree:true});
+
+  removeOpenAppBanner();
+  setTimeout(removeOpenAppBanner, 500);
+  setTimeout(removeOpenAppBanner, 1500);
+
+  new MutationObserver(function(mutations){
+    mutations.forEach(function(m){
+      m.addedNodes.forEach(function(node){
+        if(node.nodeType !== 1) return;
+        // Check the node itself
+        if(node.classList && node.classList.contains('fixed-container') && node.classList.contains('bottom')){
+          try { node.parentNode && node.parentNode.removeChild(node); } catch(_) {}
+          return;
+        }
+        // Check descendants
+        node.querySelectorAll && node.querySelectorAll('.fixed-container.bottom').forEach(function(el){
+          try { el.parentNode && el.parentNode.removeChild(el); } catch(_) {}
+        });
+      });
+    });
+  }).observe(document.documentElement,{childList:true,subtree:true});
 })();
 ''');
 
@@ -825,9 +900,14 @@ class AutomationProvider extends ChangeNotifier {
       // Dismiss open-app banners
       await _wvc!.executeScript(
         '(function(){'
-        'var U=/open\\s*app|install|use\\s+mobile/i;'
-        'document.querySelectorAll("[data-testid=msite-open-app-banner],[data-testid=open_app_banner],.smartbanner,#smartbanner")'
+        r'var U=/open\s*app|install|use\s+mobile/i;'
+        'document.querySelectorAll("[data-testid=msite-open-app-banner],[data-testid=open_app_banner],.smartbanner,#smartbanner,.fixed-container.bottom")'
         '.forEach(function(el){el.style.setProperty("display","none","important");});'
+        'document.querySelectorAll("*").forEach(function(el){'
+        'try{var cls=el.className||"";'
+        'if(typeof cls==="string"&&cls.indexOf("fixed-container")!==-1&&cls.indexOf("bottom")!==-1)'
+        'el.style.setProperty("display","none","important");'
+        '}catch(_){}});'
         'document.querySelectorAll("div,a,button").forEach(function(el){'
         'try{var cs=window.getComputedStyle(el);'
         'if(cs.position!=="fixed"&&cs.position!=="sticky")return;'
@@ -1082,17 +1162,9 @@ class AutomationProvider extends ChangeNotifier {
         String resolvedUrl;
 
         if (existingUrl.isNotEmpty) {
-          // ── Strategy A: direct loadUrl ─────────────────────────
-          // WebView2 url stream fires for real navigations.
-          // ⚡ Watch BEFORE loadUrl — no await above this.
-          debugPrint('[deepSync] #$i Strategy A loadUrl — ${_groups[i].name}');
-          final urlWatch = _waitForNavUrl(
-            fallback: existingUrl,
-            context: '#$i',
-            useWebMessage: false,
-          );
-          await _wvc!.loadUrl(existingUrl);
-          resolvedUrl = await urlWatch;
+          // ── Strategy A: URL already known — use directly, no navigation ─
+          debugPrint('[deepSync] #$i Strategy A skip nav — ${_groups[i].name}');
+          resolvedUrl = existingUrl;
 
         } else {
           // ── Strategy B: JS click → history.pushState → NAV_URL: msg
@@ -1107,9 +1179,12 @@ class AutomationProvider extends ChangeNotifier {
           bool navTriggered = false;
           try {
             final dynamic res = await _wvc!.executeScript(
-              'typeof window.navigateToGroup === "function"'
-              ' ? String(window.navigateToGroup(${_groups[i].index}))'
-              ' : "missing"',
+              '(function(){'
+              '  if (typeof window.navigateToGroup !== "function") return "missing";'
+              '  var len = window.__foundGroups ? window.__foundGroups.length : 0;'
+              '  if (${_groups[i].index} < 0 || ${_groups[i].index} >= len) return "oob";'
+              '  return String(window.navigateToGroup(${_groups[i].index}));'
+              '})()',
             );
             final resStr = res?.toString() ?? '';
             navTriggered = resStr.contains('true');
@@ -1734,6 +1809,7 @@ class AutomationProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _netTimer?.cancel();
     _webMsgSub?.cancel();
     _wvc?.dispose();
     for (final ctrl in _embedControllers.values) {

@@ -1,23 +1,22 @@
 /**
- * fb_master_script.js  v4.0
+ * fb_master_script.js  v3.0
  * ─────────────────────────────────────────────────────────────────────────────
  * Finds and clicks the Facebook "Share" button for a linked post.
  * Target: m.facebook.com inside webview_windows (WebView2 / Chromium).
  *
  * Strategy:
  *   1. Dismiss sticky "Open App" banners.
- *   2. Find the post anchor via multilingual text match (EN + SI + TA).
- *   3. Walk up the DOM — share button searched directly, no container guess.
- *   4. Find the Share button by aria-label (English + Sinhala + Tamil) or inner text.
+ *   2. Find the "From your link" post anchor via TreeWalker.
+ *   3. Walk up to the nearest post container.
+ *   4. Find the Share button by aria-label (English + Sinhala) or inner text.
  *   5. Highlight the button (green outline) for visual confirmation.
- *   6. Click and wait for share dialog to confirm before returning.
+ *   6. Click it after a 1.5 s delay.
  *   7. Return { status, message, ariaLabel } as a JSON string.
  *      (Double-encode is handled on the Flutter side.)
  *
  * Zero hardcoded CSS class names.
  * MutationObserver retries for AJAX-rendered feeds.
  * 10 s timeout with descriptive error messages.
- * Multilingual: English, සිංහල, Tamil confirmed strings.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 (function () {
@@ -29,19 +28,10 @@
 
   // ── 1. Dismiss banners ───────────────────────────────────────────────────────
   function hideBanners() {
-    var selectors = [
-      '[data-testid="open_app_banner"]',
-      '[data-testid="msite-open-app-banner"]',
-      '[data-testid="mobile-app-upsell"]',
-      '.smartbanner',
-      '#smartbanner',
-    ];
-    selectors.forEach(function (sel) {
-      try {
-        document.querySelectorAll(sel).forEach(function (el) {
-          el.style.setProperty('display', 'none', 'important');
-        });
-      } catch (_) {}
+    // Remove the "Open app" bottom bar — class="m fixed-container bottom"
+    // Use classList check for exact match (both classes must be present).
+    document.querySelectorAll('.fixed-container.bottom').forEach(function(el) {
+      try { el.parentNode && el.parentNode.removeChild(el); } catch(_) {}
     });
 
     // Text patterns that identify upsell/interstitial overlays:
@@ -75,22 +65,7 @@
     });
   }
 
-  // ── 2. Multilingual anchor strings — confirmed on real Facebook UI ───────────
-  //
-  //   English : "From your link"          — confirmed ✅
-  //   සිංහල  : "ඔබ සබැඳිය වෙතින්"       — confirmed ✅
-  //   සිංහල  : "ඔබගේ සබැඳියෙන්"         — alt variant ✅
-  //   Tamil   : "உங்கள் இணைப்பிலிருந்து" — confirmed ✅
-  //
-  var ANCHOR_TEXTS = [
-    'From your link',
-    'from your link',
-    '\u0D9D\u0DB6 \u0DC3\u0DB6\u0DD9\u0DAF\u0DD2\u0DBA \u0DC0\u0DDA\u0DAD\u0DD2\u0DB1\u0DCA', // ඔබ සබැඳිය වෙතින්
-    '\u0D9D\u0DB6\u0DDA\u0D9C\u0DDA \u0DC3\u0DB6\u0DD9\u0DAF\u0DD2\u0DBA\u0DDA\u0DB1\u0DCA',  // ඔබගේ සබැඳියෙන්
-    '\u0B89\u0B99\u0BCD\u0B95\u0BB3\u0BCD \u0B87\u0BA3\u0BC8\u0BAA\u0BCD\u0BAA\u0BBF\u0BB2\u0BBF\u0BB0\u0BC1\u0BA8\u0BCD\u0BA4\u0BC1', // உங்கள் இணைப்பிலிருந்து
-  ];
-
-  // ── 3. Find anchor element via text match ────────────────────────────────────
+  // ── 2. Locate "From your link" text node ────────────────────────────────────
   function findAnchor() {
     // Fast path: TreeWalker over all text nodes
     var walker = document.createTreeWalker(
@@ -102,66 +77,70 @@
     var node;
     while ((node = walker.nextNode())) {
       var v = (node.nodeValue || '').trim();
-      if (ANCHOR_TEXTS.indexOf(v) !== -1) {
+      if (v === 'From your link' || v === 'from your link') {
         return node.parentElement;
       }
     }
-    // Fallback: innerText scan on visible elements
+    // Fallback: innerText scan
     var els = document.querySelectorAll('div, span, p, a');
     for (var i = 0; i < els.length; i++) {
-      var t = (els[i].innerText || '').trim();
-      if (ANCHOR_TEXTS.indexOf(t) !== -1) {
+      if ((els[i].innerText || '').trim() === 'From your link') {
         return els[i];
       }
     }
     return null;
   }
 
-  // ── 4. Walk UP from anchor — find share button directly, no container guess ──
-  //
-  // OLD approach: anchor → findContainer() → findShareButton(container)
-  //   Problem: height heuristic selects wrong ancestor → wrong post's button clicked
-  //
-  // NEW approach: walk up from anchor, at each level search for share button.
-  //   Stop the moment we find it — no intermediate container step needed.
-  //   This eliminates the wrong-container bug entirely.
-  //
-  function findShareButtonFromAnchor(anchor) {
+  // ── 3. Climb to post container ───────────────────────────────────────────────
+  function findContainer(anchor) {
     var tmp = anchor;
-    var MAX_LEVELS = 20; // DOM ඉහළට කොච්චර walk කරනවද limit
-    var level = 0;
 
-    while (tmp && tmp !== document.body && level < MAX_LEVELS) {
-      var btn = _searchShareButton(tmp);
-      if (btn) return btn;
+    // data-pagelet="FeedUnit.*"
+    while (tmp && tmp !== document.body) {
+      if (/^FeedUnit/.test(tmp.getAttribute('data-pagelet') || '')) return tmp;
       tmp = tmp.parentElement;
-      level++;
     }
-
-    // Last resort: full document search
-    return _searchShareButton(document.body);
+    // role="article" / <article>
+    tmp = anchor;
+    while (tmp && tmp !== document.body) {
+      var role = (tmp.getAttribute('role') || '');
+      if (role === 'article' || tmp.tagName === 'ARTICLE') return tmp;
+      tmp = tmp.parentElement;
+    }
+    // Direct child of role="feed"
+    tmp = anchor;
+    while (tmp && tmp !== document.body) {
+      var parent = tmp.parentElement;
+      if (parent && parent.getAttribute('role') === 'feed') return tmp;
+      tmp = parent;
+    }
+    // Height heuristic: first ancestor ≥ 200 px
+    tmp = anchor;
+    while (tmp && tmp.parentElement && tmp.parentElement !== document.body) {
+      if (
+        tmp.offsetHeight >= 200 &&
+        tmp.parentElement.offsetHeight > tmp.offsetHeight * 1.2
+      ) return tmp;
+      tmp = tmp.parentElement;
+    }
+    // Last resort: grandparent
+    return (anchor.parentElement && anchor.parentElement.parentElement)
+        || anchor.parentElement
+        || anchor;
   }
 
-  function _searchShareButton(root) {
-    var btns = root.querySelectorAll('[role="button"], button');
-    for (var i = 0; i < btns.length; i++) {
-      if (isShareButton(btns[i]) && isVisible(btns[i])) return btns[i];
-    }
-    return null;
-  }
-
-  // ── 5. Identify the Share button ────────────────────────────────────────────
+  // ── 4. Identify the Share button ────────────────────────────────────────────
   //
-  // Supported aria-label values (confirmed):
-  //   English : "Share"
-  //   සිංහල  : "බෙදාගන්න" / "බෙදා ගන්න" / "සලකුණු කරන්න"
-  //   Tamil   : "பகிர்" (Pakir)
+  // Supported aria-label values:
+  //   English : "Share"  (case-insensitive, icon characters stripped)
+  //   Sinhala : "බෙදාගන්න"  (U+0DB6 U+0DD9 U+0DAF U+0DCF U+0D9C U+0DB1 U+0DCA U+0DB1)
+  //             "Share"  written as "බෙදා ගන්න" (with space) also accepted
+  //             "සලකුණු කරන්න" (Mark / tag — some locales map to share)
 
-  var SHARE_LABELS = [
-    '\u0DB6\u0DD9\u0DAF\u0DCF\u0D9C\u0DB1\u0DCA\u0DB1',           // බෙදාගන්න
-    '\u0DB6\u0DD9\u0DAF\u0DCF \u0D9C\u0DB1\u0DCA\u0DB1',          // බෙදා ගන්න
+  var SHARE_SINHALA = [
+    '\u0DB6\u0DD9\u0DAF\u0DCF\u0D9C\u0DB1\u0DCA\u0DB1',  // බෙදාගන්න
+    '\u0DB6\u0DD9\u0DAF\u0DCF \u0D9C\u0DB1\u0DCA\u0DB1', // බෙදා ගන්න
     '\u0DC3\u0DBD\u0D9A\u0DD4\u0DAB\u0DD4 \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1', // සලකුණු කරන්න
-    '\u0BAA\u0B95\u0BBF\u0BB0\u0BCD',                              // பகிர் (Tamil)
   ];
 
   /** Strip Unicode private-use / icon glyphs and normalise to lowercase ASCII. */
@@ -175,22 +154,20 @@
   }
 
   function isShareButton(el) {
-    var label = el.getAttribute('aria-label') || '';
+    var label    = el.getAttribute('aria-label') || '';
+    var labelLC  = label.toLowerCase();
 
-    // සිංහල + Tamil labels — original string compare (toLowerCase බලන්නේ නැහැ)
-    for (var s = 0; s < SHARE_LABELS.length; s++) {
-      if (label.indexOf(SHARE_LABELS[s]) !== -1) return true;
+    // Sinhala labels (exact substring match, preserves Unicode)
+    for (var s = 0; s < SHARE_SINHALA.length; s++) {
+      if (labelLC.indexOf(SHARE_SINHALA[s]) !== -1) return true;
     }
 
-    // English label — icon glyphs strip කරලා check කරනවා
+    // English label after stripping icon glyphs
     if (stripIcons(label).indexOf('share') !== -1) return true;
 
-    // innerText exact match (English fallback)
+    // Inner text exact match
     var innerText = (el.innerText || '').trim().toLowerCase();
     if (innerText === 'share') return true;
-
-    // Tamil innerText
-    if ((el.innerText || '').trim() === '\u0BAA\u0B95\u0BBF\u0BB0\u0BCD') return true;
 
     return false;
   }
@@ -206,6 +183,20 @@
       cur = cur.parentElement;
     }
     return true;
+  }
+
+  function findShareButton(container) {
+    // Search within container first
+    var btns = container.querySelectorAll('[role="button"]');
+    for (var i = 0; i < btns.length; i++) {
+      if (isShareButton(btns[i]) && isVisible(btns[i])) return btns[i];
+    }
+    // Widen to full document
+    var all = document.querySelectorAll('[role="button"]');
+    for (var j = 0; j < all.length; j++) {
+      if (isShareButton(all[j]) && isVisible(all[j])) return all[j];
+    }
+    return null;
   }
 
   // ── 5. Highlight the button ──────────────────────────────────────────────────
@@ -282,17 +273,17 @@
     if (!anchor) {
       return {
         status: 'failed',
-        message: 'Post anchor text not found (EN/SI/TA). Make sure the post page is fully loaded.',
+        message: '"From your link" text not found. Make sure the post page is fully loaded.',
       };
     }
 
-    // නව approach: container guess නැතුව anchor එකෙන් directly button හොයනවා
-    var btn = findShareButtonFromAnchor(anchor);
+    var container = findContainer(anchor);
+    var btn       = findShareButton(container);
 
     if (!btn) {
       return {
         status: 'failed',
-        message: 'Share button not found near the post anchor.',
+        message: 'Share button not found in the post container.',
       };
     }
 
@@ -301,7 +292,7 @@
 
     return {
       status:    'success',
-      message:   'Share button found — click queued (1.5s).',
+      message:   'Share button located and clicked.',
       ariaLabel: btn.getAttribute('aria-label') || '',
     };
   }

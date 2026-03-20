@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "fb_share_automation" "\0"
+            VALUE "CompanyName", "Smart Solutions" "\0"
+            VALUE "FileDescription", "Smart Connect Automator - FB Group Sharing Tool" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "fb_share_automation" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "fb_share_automation.exe" "\0"
-            VALUE "ProductName", "fb_share_automation" "\0"
+            VALUE "InternalName", "smart_connect_automator" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Smart Solutions. All rights reserved." "\0"
+            VALUE "OriginalFilename", "smart_connect_automator.exe" "\0"
+            VALUE "ProductName", "Smart Connect Automator" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
