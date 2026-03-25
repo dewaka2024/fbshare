@@ -141,19 +141,31 @@
   // and keep the best (longest/non-placeholder) URL per group name.
   var _imageCache = {}; // name -> imageUrl
 
+  var _reportedNames = {}; // track already-reported groups
+
   function snapshotImages() {
     document.querySelectorAll('[data-mcomponent="MContainer"][tabindex="0"]')
       .forEach(function(el) {
         if (!el.querySelector('img')) return;
-        if (isInsideBanner(el)) return; // skip Open app banner
+        if (isInsideBanner(el)) return;
         var name = extractName(el);
         if (!name) return;
         var src = (el.querySelector('img') || {}).src || '';
-        // Keep best URL: prefer scontent CDN URLs over placeholders/data URIs
         if (src && src.indexOf('data:') !== 0 && src.length > 20) {
           if (!_imageCache[name] || src.length > _imageCache[name].length) {
             _imageCache[name] = src;
           }
+        }
+        // Stream each new group as it appears — post GROUP: message immediately
+        if (!_reportedNames[name]) {
+          _reportedNames[name] = true;
+          var url = extractUrl(el);
+          postMsg('GROUP:' + JSON.stringify({
+            name:     name,
+            imageUrl: _imageCache[name] || src,
+            url:      url,
+            index:    Object.keys(_reportedNames).length - 1
+          }));
         }
       });
   }
@@ -193,6 +205,7 @@
         snapshotImages(); // ← capture again after extra scroll
       } else {
         retries++;
+        postMsg('RETRY:retry ' + retries + '/' + MAX_RETRIES + ', groups=' + currentCount);
         if (retries >= MAX_RETRIES) break;
         postMsg('COUNT:' + currentCount);
         await sleep(RETRY_PAUSE_MS);
@@ -278,10 +291,12 @@
       return true;
     };
 
+    postMsg('DONE:scroll complete — ' + results.length + ' groups extracted');
     postMsg('FINAL_DATA:' + JSON.stringify(results));
   }
 
   run().catch(function(e) {
+    postMsg('DONE:scraper error — ' + String(e));
     postMsg('FINAL_DATA:' + JSON.stringify([]));
   });
 })();

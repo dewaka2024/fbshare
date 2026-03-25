@@ -729,29 +729,56 @@ class _Col2GroupCategorizer extends StatelessWidget {
             ]),
             const SizedBox(height: 8),
 
-            // Sync + Deep Sync buttons
+            // Initialize / Sync / Deep Sync buttons
+            // Row 1: Initialize (full pipeline)
+            SizedBox(
+              height: 36, width: double.infinity,
+              child: _DashAccentButton(
+                icon: prov.isSyncing
+                    ? Icons.sync_rounded
+                    : prov.isDeepSyncing
+                        ? Icons.stop_rounded
+                        : Icons.rocket_launch_rounded,
+                label: prov.isSyncing
+                    ? 'Scraping Groups… (${prov.groupsFound})'
+                    : prov.isDeepSyncing
+                        ? 'Stop  (${prov.deepSyncIndex + 1}/${prov.groups.length})'
+                        : 'Initialize',
+                color: prov.isSyncing
+                    ? _amber
+                    : prov.isDeepSyncing
+                        ? _red
+                        : const Color(0xFF059669),
+                onPressed: prov.webViewReady
+                    ? (prov.isDeepSyncing
+                        ? prov.stopDeepSync
+                        : (!prov.isSyncing ? () => prov.initialize() : null))
+                    : null,
+              ),
+            ),
+            const SizedBox(height: 6),
+            // Row 2: Sync Groups + Deep Sync (separate)
             Row(children: [
               Expanded(
-                child: SizedBox(height: 34,
+                child: SizedBox(height: 32,
                   child: _DashAccentButton(
                     icon: Icons.sync_rounded,
-                    label: prov.isSyncing ? 'Syncing… (${prov.groupsFound})' : 'Sync Groups',
+                    label: prov.isSyncing ? '${prov.groupsFound}…' : 'Sync Groups',
                     color: _accent,
-                    onPressed: prov.webViewReady && !prov.isSyncing ? () => prov.fetchGroups() : null,
+                    onPressed: prov.webViewReady && !prov.isSyncing && !prov.isDeepSyncing
+                        ? () => prov.fetchGroups() : null,
                   )),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               Expanded(
-                child: SizedBox(height: 34,
+                child: SizedBox(height: 32,
                   child: _DashAccentButton(
-                    icon: prov.isDeepSyncing ? Icons.stop_rounded : Icons.travel_explore_rounded,
-                    label: prov.isDeepSyncing
-                        ? 'Stop (${prov.deepSyncIndex + 1}/${prov.groups.length})'
-                        : 'Deep Sync',
-                    color: prov.isDeepSyncing ? _amber : const Color(0xFF7C3AED),
+                    icon: Icons.travel_explore_rounded,
+                    label: 'Deep Sync',
+                    color: const Color(0xFF7C3AED),
                     onPressed: prov.webViewReady && prov.groups.isNotEmpty
-                        ? (prov.isDeepSyncing ? prov.stopDeepSync : prov.deepSync)
-                        : null,
+                        && !prov.isSyncing && !prov.isDeepSyncing
+                        ? prov.deepSync : null,
                   )),
               ),
             ]),

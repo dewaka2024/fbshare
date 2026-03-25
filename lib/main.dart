@@ -3,11 +3,19 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:webview_windows/webview_windows.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'providers/automation_provider.dart';
 import 'ui/home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ── Initialize sqflite for Windows (desktop) ──────────────────────────────
+  // sqflite alone does not support Windows. sqflite_common_ffi must be
+  // initialized here — before any DatabaseHelper call — or you get:
+  // "Bad state: databaseFactory not initialized"
+  sqfliteFfiInit();
+  databaseFactory = databaseFactoryFfi;
 
   // ── Initialize WebView2 environment ONCE before anything else. ────────────
   // webview_windows uses a single WebView2 process per app — calling

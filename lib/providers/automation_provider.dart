@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_windows/webview_windows.dart';
+import '../db/database_helper.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Human-like delay helper
@@ -56,9 +57,13 @@ class FBGroup {
   /// Extract a short group ID from a Facebook group URL.
   /// https://www.facebook.com/groups/1234567890/ → "1234567890"
   static String extractGroupId(String url) {
-    if (url.isEmpty) return '';
+    if (url.isEmpty) {
+      return '';
+    }
     final uri = Uri.tryParse(url);
-    if (uri == null) return '';
+    if (uri == null) {
+      return '';
+    }
     final segments = uri.pathSegments
         .where((s) => s.isNotEmpty && s != 'groups')
         .toList();
@@ -166,7 +171,9 @@ class FBItem {
 
   static String buildEmbedUrl(String originalUrl) {
     var url = originalUrl.trim();
-    if (url.isEmpty) return '';
+    if (url.isEmpty) {
+      return '';
+    }
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       url = 'https://$url';
     }
@@ -265,7 +272,9 @@ class EmbedCardController extends ChangeNotifier {
   EmbedCardController(this.embedUrl);
 
   Future<void> init() async {
-    if (_wvc != null) return;
+    if (_wvc != null) {
+      return;
+    }
     await WebEnvironmentManager.instance.ensureDesktopEnv();
     _wvc = await WebEnvironmentManager.instance.createDesktopController();
     await _wvc!.setBackgroundColor(Colors.white);
@@ -350,17 +359,23 @@ class BackgroundShareController {
 
   Future<bool> _waitForLoad({int timeoutMs = 12000}) async {
     final ctrl = _wvc;
-    if (ctrl == null) return false;
+    if (ctrl == null) {
+      return false;
+    }
     final completer = Completer<bool>();
     StreamSubscription<LoadingState>? sub;
     Future.delayed(Duration(milliseconds: timeoutMs), () {
-      if (!completer.isCompleted) completer.complete(false);
+      if (!completer.isCompleted) {
+        completer.complete(false);
+      }
     });
     sub = ctrl.loadingState.listen((state) {
       if (state == LoadingState.navigationCompleted) {
         sub?.cancel();
         Future.delayed(const Duration(milliseconds: 1500), () {
-          if (!completer.isCompleted) completer.complete(true);
+          if (!completer.isCompleted) {
+            completer.complete(true);
+          }
         });
       }
     });
@@ -388,9 +403,13 @@ class BackgroundShareController {
   for (var i = 0; i < btns.length; i++) {
     var b = btns[i];
     var lbl = (b.getAttribute('aria-label') || b.innerText || '').trim();
-    if (!SUBMIT_RE.test(lbl)) continue;
+    if (!SUBMIT_RE.test(lbl)) {
+      continue;
+    }
     var r = b.getBoundingClientRect();
-    if (!r.width || !r.height) continue;
+    if (!r.width || !r.height) {
+      continue;
+    }
     humanClick(b);
     return JSON.stringify({ status: 'success', message: 'Share submitted via background WebView.' });
   }
@@ -399,15 +418,23 @@ class BackgroundShareController {
 ''';
 
   Map<String, dynamic> _decode(dynamic raw) {
-    if (raw is Map) return Map<String, dynamic>.from(raw);
+    if (raw is Map) {
+      return Map<String, dynamic>.from(raw);
+    }
     var s = raw.toString().trim();
-    if (s.isEmpty) return {'status': 'failed', 'message': 'Empty response'};
+    if (s.isEmpty) {
+      return {'status': 'failed', 'message': 'Empty response'};
+    }
     try {
       final v = jsonDecode(s);
-      if (v is Map) return Map<String, dynamic>.from(v);
+      if (v is Map) {
+        return Map<String, dynamic>.from(v);
+      }
       if (v is String) {
         final v2 = jsonDecode(v);
-        if (v2 is Map) return Map<String, dynamic>.from(v2);
+        if (v2 is Map) {
+          return Map<String, dynamic>.from(v2);
+        }
       }
     } catch (_) {}
     return {'status': 'failed', 'message': 'Non-JSON: $s'};
@@ -442,6 +469,13 @@ class AutomationProvider extends ChangeNotifier {
   // ── Main WebView (Automation tab) — mobileEnv ─────────────────────────────
   WebviewController? _wvc;
   WebviewController? get webviewController => _wvc;
+
+  // ── Navigation WebView Pool ───────────────────────────────────────────────
+  // Hidden WebViews used for parallel group URL resolution.
+  // Pool size is fixed at 5 — balances speed vs RAM.
+  static const int _poolSize = 5;
+  final List<WebviewController?> _pool        = List.filled(5, null);
+  bool                           _poolReady   = false;
 
   Stream<String>?       _urlStream;
   Stream<LoadingState>? _loadingStream;
@@ -494,7 +528,9 @@ class AutomationProvider extends ChangeNotifier {
       _groups.where((g) => g.categoryId == categoryId).toList();
 
   void addCategory(String name) {
-    if (name.trim().isEmpty) return;
+    if (name.trim().isEmpty) {
+      return;
+    }
     _categories.add(GroupCategory(
       id:   DateTime.now().millisecondsSinceEpoch.toString(),
       name: name.trim(),
@@ -517,7 +553,9 @@ class AutomationProvider extends ChangeNotifier {
 
   void toggleCategoryExpanded(String id) {
     final idx = _categories.indexWhere((c) => c.id == id);
-    if (idx == -1) return;
+    if (idx == -1) {
+      return;
+    }
     _categories[idx].isExpanded = !_categories[idx].isExpanded;
     notifyListeners();
   }
@@ -525,7 +563,9 @@ class AutomationProvider extends ChangeNotifier {
   /// Move a group to a category. Pass '' for Uncategorized.
   void moveGroupToCategory(String groupName, String categoryId) {
     final idx = _groups.indexWhere((g) => g.name == groupName);
-    if (idx == -1) return;
+    if (idx == -1) {
+      return;
+    }
     _groups[idx] = _groups[idx].withCategory(categoryId);
     _savePrefs();
     notifyListeners();
@@ -567,7 +607,8 @@ class AutomationProvider extends ChangeNotifier {
   // ── Network Monitor ───────────────────────────────────────────────────────
   Timer?  _netTimer;
   int?    _pingMs;        // null = unknown, -1 = offline
-  bool    _netChecking = false;
+  bool    _netChecking  = false;
+  bool    _autoDeepSync = false; // when true, deepSync() auto-starts after fetchGroups
 
   int?  get pingMs       => _pingMs;
   bool  get netOffline   => _pingMs == -1;
@@ -579,11 +620,162 @@ class AutomationProvider extends ChangeNotifier {
     _netTimer = Timer.periodic(const Duration(seconds: 15), (_) => _checkNetwork());
   }
 
+  /// Initialize — scrape groups + auto deep sync in one go
+  /// Initialize — two phase pipeline:
+  /// Phase 1: Scrape ALL groups (scroll until done)
+  /// Phase 2: Pool 5 navigate + resolve (parallel)
+  /// Initialize — fetchGroups() + deepSync Phase 2 (no re-scroll)
+  Future<void> initialize() async {
+    if (_wvc == null) {
+      _setStatus(AutomationStatus.error, '❌ WebView not ready.');
+      return;
+    }
+
+    // Step 1: Scrape groups
+    await fetchGroups();
+    while (_isSyncing || _groupsFetching) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    if (_groups.isEmpty) {
+      return;
+    }
+
+    // Step 2: Load groups page + inject scraper (history.pushState patch)
+    _isDeepSyncing    = true;
+    _stopDeepSync     = false;
+    _deepSyncIndex    = 0;
+    _highlightedGroup = '';
+    _deepSyncResults.clear();
+    notifyListeners();
+
+    final total = _groups.length;
+
+    try {
+      _setStatus(AutomationStatus.navigating, '🔄 Initialize: loading groups page…');
+      await _wvc!.loadUrl('https://www.facebook.com/groups/');
+      await _waitForNavigation(timeoutMs: 28000, extraMs: 3000);
+      if (_stopDeepSync) {
+        return;
+      }
+
+      _setStatus(AutomationStatus.running, '🔄 Initialize: preparing navigation…');
+
+      final script = await rootBundle.loadString('assets/scripts/fb_group_scraper.js');
+      final scraperDone = Completer<void>();
+      StreamSubscription<dynamic>? scraperSub;
+      scraperSub = _webMessageStream?.listen((dynamic raw) {
+        final msg = raw?.toString() ?? '';
+        if (msg.startsWith('FINAL_DATA:') || msg.startsWith('DONE:')) {
+          scraperSub?.cancel();
+          if (!scraperDone.isCompleted) {
+            scraperDone.complete();
+          }
+        }
+      });
+      await _wvc!.executeScript(script);
+      await scraperDone.future;
+      await scraperSub?.cancel();
+      if (_stopDeepSync) {
+        return;
+      }
+
+      await Future.delayed(const Duration(milliseconds: 600));
+
+      // Step 3: Navigate each group — exactly deepSync Phase 2
+      for (int i = 0; i < total; i++) {
+        if (_stopDeepSync) {
+          break;
+        }
+
+        _deepSyncIndex    = i;
+        _highlightedGroup = _groups[i].name;
+        _setStatus(AutomationStatus.running,
+            '🔄 Initialize: ${i + 1}/$total — ${_groups[i].name}');
+        notifyListeners();
+
+        final existingUrl = _groups[i].url;
+        String resolvedUrl;
+
+        if (existingUrl.isNotEmpty) {
+          _stopDeepSync = false;
+          final urlWatch = _waitForNavUrl(
+            fallback: existingUrl,
+            context: 'init#$i',
+            useWebMessage: false,
+          );
+          await _wvc!.loadUrl(toAutomationUrl(existingUrl));
+          resolvedUrl = await urlWatch;
+        } else {
+          final urlWatch = _waitForNavUrl(
+            fallback: '',
+            context: 'init#$i',
+            useWebMessage: true,
+          );
+          bool navTriggered = false;
+          try {
+            final dynamic res = await _wvc!.executeScript(
+              '(function(){'
+              '  if (typeof window.navigateToGroup !== "function") return "missing";'
+              '  var len = window.__foundGroups ? window.__foundGroups.length : 0;'
+              '  if (${_groups[i].index} < 0 || ${_groups[i].index} >= len) return "oob";'
+              '  return String(window.navigateToGroup(${_groups[i].index}));'
+              '})()',
+            );
+            navTriggered = res?.toString().contains('true') == true;
+          } catch (e) {
+            debugPrint('[initialize] JS click: $e');
+          }
+          if (!navTriggered) {
+            _deepSyncResults.add(_groups[i]);
+            continue;
+          }
+          resolvedUrl = await urlWatch;
+        }
+
+        if (_stopDeepSync) {
+          break;
+        }
+
+        final extractedId = _extractGroupId(resolvedUrl);
+        final updated = FBGroup(
+          name:     _groups[i].name,
+          index:    _groups[i].index,
+          imageUrl: _groups[i].imageUrl,
+          url:      resolvedUrl.isNotEmpty ? resolvedUrl : existingUrl,
+          groupId:  extractedId.isNotEmpty ? extractedId : _groups[i].groupId,
+        );
+        _groups[i] = updated;
+        _deepSyncResults.add(updated);
+        await _saveGroupsToDisk();
+        notifyListeners();
+      }
+
+      _highlightedGroup = '';
+      if (_stopDeepSync) {
+        _setStatus(AutomationStatus.idle,
+            '⏹ Initialize stopped — ${_deepSyncResults.length}/$total saved.');
+      } else {
+        _setStatus(AutomationStatus.success,
+            '✅ Initialize complete — ${_deepSyncResults.length}/$total resolved.');
+      }
+
+    } catch (e, stack) {
+      debugPrint('[initialize] error: $e\n$stack');
+      _setStatus(AutomationStatus.error, '❌ Initialize error: $e');
+    } finally {
+      _isDeepSyncing    = false;
+      _highlightedGroup = '';
+      notifyListeners();
+    }
+  }
+
   /// Public method — called from UI refresh button
   void checkNetworkNow() { _checkNetwork(); }
 
   Future<void> _checkNetwork() async {
-    if (_netChecking) return;
+    if (_netChecking) {
+      return;
+    }
     _netChecking = true;
     try {
       final client = HttpClient();
@@ -617,11 +809,15 @@ class AutomationProvider extends ChangeNotifier {
   /// to serve the mobile layout regardless of domain.
   static String toAutomationUrl(String raw) {
     var url = raw.trim();
-    if (url.isEmpty) return url;
+    if (url.isEmpty) {
+      return url;
+    }
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       url = 'https://$url';
     }
-    if (url.startsWith('http://')) url = 'https://${url.substring(7)}';
+    if (url.startsWith('http://')) {
+      url = 'https://${url.substring(7)}';
+    }
     url = url
         .replaceFirst('https://m.facebook.com',  'https://www.facebook.com')
         .replaceFirst('https://facebook.com',     'https://www.facebook.com')
@@ -634,51 +830,158 @@ class AutomationProvider extends ChangeNotifier {
   // ── Persistence ────────────────────────────────────────────────────────────
 
   Future<void> _loadPrefs() async {
+    final db = DatabaseHelper.instance;
+
+    // ── Migrate from SharedPreferences on first run ──────────────────────
     final prefs = await SharedPreferences.getInstance();
-    _postUrl = prefs.getString(_kUrl) ?? '';
-
-    final rawPages = prefs.getString(_kPages);
-    if (rawPages != null) {
-      try {
-        final list = jsonDecode(rawPages) as List<dynamic>;
-        _pages.addAll(list.map((e) => FBPage.fromJson(Map<String, dynamic>.from(e as Map))));
-      } catch (_) {}
+    final migrated = prefs.getBool('_db_migrated') ?? false;
+    if (!migrated) {
+      await _migrateFromSharedPrefs(prefs, db);
+      await prefs.setBool('_db_migrated', true);
     }
 
-    final rawItems = prefs.getString(_kItems);
-    if (rawItems != null) {
-      try {
-        final list = jsonDecode(rawItems) as List<dynamic>;
-        _items.addAll(list.map((e) => FBItem.fromJson(Map<String, dynamic>.from(e as Map))));
-      } catch (_) {}
-    }
+    // ── Load from SQLite ─────────────────────────────────────────────────
+    _postUrl = await db.getSetting(_kUrl);
 
-    final rawGroups = prefs.getString(_kGroups);
-    if (rawGroups != null) {
-      try {
-        final list = jsonDecode(rawGroups) as List<dynamic>;
-        _groups.addAll(list.map((e) => FBGroup.fromJson(Map<String, dynamic>.from(e as Map))));
-      } catch (_) {}
-    }
+    final dbPages = await db.getPages();
+    _pages.addAll(dbPages.map((r) => FBPage(
+      url:      r['url']       as String? ?? '',
+      name:     r['name']      as String? ?? '',
+      imageUrl: r['image_url'] as String? ?? '',
+    )));
 
-    final rawCats = prefs.getString(_kCategories);
-    if (rawCats != null) {
-      try {
-        final list = jsonDecode(rawCats) as List<dynamic>;
-        _categories.addAll(list.map((e) => GroupCategory.fromJson(Map<String, dynamic>.from(e as Map))));
-      } catch (_) {}
-    }
+    final dbItems = await db.getItems();
+    _items.addAll(dbItems.map((r) {
+      final url = r['original_url'] as String? ?? '';
+      return FBItem(
+        id:            r['id']     as String? ?? '',
+        originalUrl:   url,
+        embedUrl:      FBItem.buildEmbedUrl(url),
+        savedAt:       DateTime.fromMillisecondsSinceEpoch(
+                         r['created_at'] as int? ?? 0),
+        ogTitle:       r['og_title'] as String? ?? '',
+        ogDescription: r['og_desc']  as String? ?? '',
+        ogImage:       r['og_image'] as String? ?? '',
+      );
+    }));
+
+    final dbGroups = await db.getGroups();
+    _groups.addAll(dbGroups.map((r) => FBGroup(
+      name:       r['name']        as String? ?? '',
+      imageUrl:   r['image_url']   as String? ?? '',
+      url:        r['url']         as String? ?? '',
+      groupId:    r['group_id']    as String? ?? '',
+      categoryId: r['category_id'] as String? ?? '',
+      index:      r['idx']         as int?    ?? -1,
+    )));
+
+    final dbCats = await db.getCategories();
+    _categories.addAll(dbCats.map((r) => GroupCategory(
+      id:         r['id']          as String? ?? '',
+      name:       r['name']        as String? ?? '',
+      isExpanded: (r['is_expanded'] as int? ?? 1) == 1,
+    )));
 
     notifyListeners();
   }
 
+  // ── One-time migration from SharedPreferences → SQLite ─────────────────
+  Future<void> _migrateFromSharedPrefs(
+      SharedPreferences prefs, DatabaseHelper db) async {
+    try {
+      final url = prefs.getString(_kUrl);
+      if (url != null && url.isNotEmpty) {
+        await db.setSetting(_kUrl, url);
+      }
+
+      final rawPages = prefs.getString(_kPages);
+      if (rawPages != null) {
+        final list = jsonDecode(rawPages) as List<dynamic>;
+        await db.savePages(list.map((e) {
+          final m = Map<String, dynamic>.from(e as Map);
+          return {'url': m['url'] ?? '', 'name': m['name'] ?? '', 'image_url': m['imageUrl'] ?? ''};
+        }).toList());
+      }
+
+      final rawItems = prefs.getString(_kItems);
+      if (rawItems != null) {
+        final list = jsonDecode(rawItems) as List<dynamic>;
+        await db.saveItems(list.map((e) {
+          final m = Map<String, dynamic>.from(e as Map);
+          return {
+            'id':           m['id']          ?? '',
+            'original_url': m['originalUrl'] ?? '',
+            'og_title':     m['ogTitle']     ?? '',
+            'og_desc':      m['ogDescription'] ?? '',
+            'og_image':     m['ogImage']     ?? '',
+            'created_at':   DateTime.now().millisecondsSinceEpoch,
+          };
+        }).toList());
+      }
+
+      final rawGroups = prefs.getString(_kGroups);
+      if (rawGroups != null) {
+        final list = jsonDecode(rawGroups) as List<dynamic>;
+        await db.saveGroups(list.map((e) {
+          final m = Map<String, dynamic>.from(e as Map);
+          return {
+            'id':          m['groupId'] ?? m['name'] ?? '',
+            'name':        m['name']      ?? '',
+            'image_url':   m['imageUrl']  ?? '',
+            'url':         m['url']       ?? '',
+            'group_id':    m['groupId']   ?? '',
+            'category_id': m['categoryId'] ?? '',
+            'idx':         m['index']     ?? -1,
+          };
+        }).toList());
+      }
+
+      final rawCats = prefs.getString(_kCategories);
+      if (rawCats != null) {
+        final list = jsonDecode(rawCats) as List<dynamic>;
+        await db.saveCategories(list.map((e) {
+          final m = Map<String, dynamic>.from(e as Map);
+          return {
+            'id':          m['id']         ?? '',
+            'name':        m['name']       ?? '',
+            'is_expanded': (m['isExpanded'] == true) ? 1 : 0,
+          };
+        }).toList());
+      }
+      debugPrint('[migrate] SharedPreferences → SQLite done');
+    } catch (e) {
+      debugPrint('[migrate] error: $e');
+    }
+  }
+
   Future<void> _savePrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kUrl,        _postUrl);
-    await prefs.setString(_kPages,      jsonEncode(_pages.map((p)  => p.toJson()).toList()));
-    await prefs.setString(_kItems,      jsonEncode(_items.map((i)  => i.toJson()).toList()));
-    await prefs.setString(_kGroups,     jsonEncode(_groups.map((g) => g.toJson()).toList()));
-    await prefs.setString(_kCategories, jsonEncode(_categories.map((c) => c.toJson()).toList()));
+    final db = DatabaseHelper.instance;
+    await db.setSetting(_kUrl, _postUrl);
+    await db.savePages(_pages.map((p) => {
+      'url': p.url, 'name': p.name, 'image_url': p.imageUrl,
+    }).toList());
+    await db.saveItems(_items.map((i) => {
+      'id':           i.id,
+      'original_url': i.originalUrl,
+      'og_title':     i.ogTitle,
+      'og_desc':      i.ogDescription,
+      'og_image':     i.ogImage,
+      'created_at':   i.savedAt.millisecondsSinceEpoch,
+    }).toList());
+    await db.saveGroups(_groups.map((g) => {
+      'id':          g.groupId.isNotEmpty ? g.groupId : g.name,
+      'name':        g.name,
+      'image_url':   g.imageUrl,
+      'url':         g.url,
+      'group_id':    g.groupId,
+      'category_id': g.categoryId,
+      'idx':         g.index,
+    }).toList());
+    await db.saveCategories(_categories.map((c) => {
+      'id':          c.id,
+      'name':        c.name,
+      'is_expanded': c.isExpanded ? 1 : 0,
+    }).toList());
   }
 
   void setPostUrl(String url) {
@@ -689,8 +992,45 @@ class AutomationProvider extends ChangeNotifier {
 
   // ── WebView init (Automation tab — mobileEnv) ─────────────────────────────
 
+  // ── Pool init — called once after main WebView is ready ─────────────────
+  Future<void> _initPool() async {
+    if (_poolReady) {
+      return;
+    }
+    for (int i = 0; i < _poolSize; i++) {
+      try {
+        final ctrl = await WebEnvironmentManager.instance.createMobileController();
+        await ctrl.setBackgroundColor(const Color(0xFF121212));
+        await ctrl.setPopupWindowPolicy(WebviewPopupWindowPolicy.deny);
+        // Load blank page so WebView is warmed up and ready to navigate
+        await ctrl.loadUrl('about:blank');
+        _pool[i] = ctrl;
+        debugPrint('[pool] slot $i ready');
+      } catch (e) {
+        debugPrint('[pool] init #$i error: $e');
+      }
+    }
+    _poolReady = true;
+    debugPrint('[pool] ready — ${_pool.where((c) => c != null).length}/$_poolSize controllers');
+  }
+
+  // ── Get a free pool slot (waits until one is available) ──────────────────
+
+
+
+
+  // ── Resolve one group URL using a pool WebView ────────────────────────────
+  // ── Pool-based URL resolver ───────────────────────────────────────────────
+  //
+  // Each pool WebView independently loads the group URL and reads the
+  // final window.location.href after the redirect chain settles.
+  // This is completely independent of the main WebView (no index, no click).
+
+
   Future<void> initWebView() async {
-    if (_wvc != null) return;
+    if (_wvc != null) {
+      return;
+    }
     await WebEnvironmentManager.instance.ensureMobileEnv();
     _wvc = await WebEnvironmentManager.instance.createMobileController();
 
@@ -723,7 +1063,9 @@ class AutomationProvider extends ChangeNotifier {
 
     await _wvc!.addScriptToExecuteOnDocumentCreated(r'''
 (function(){
-  if(window.__fbLeaveSuppressed) return;
+  if(window.__fbLeaveSuppressed) {
+    return;
+  }
   window.__fbLeaveSuppressed = true;
   window.onbeforeunload = null;
   window.addEventListener('beforeunload', function(e){
@@ -735,7 +1077,9 @@ class AutomationProvider extends ChangeNotifier {
 
     await _wvc!.addScriptToExecuteOnDocumentCreated(r'''
 (function(){
-  if(window.__fbBannerHider) return;
+  if(window.__fbBannerHider) {
+    return;
+  }
   window.__fbBannerHider = true;
 
   // CSS injection — fires before DOM renders.
@@ -766,7 +1110,9 @@ class AutomationProvider extends ChangeNotifier {
   new MutationObserver(function(mutations){
     mutations.forEach(function(m){
       m.addedNodes.forEach(function(node){
-        if(node.nodeType !== 1) return;
+        if(node.nodeType !== 1) {
+          return;
+        }
         // Check the node itself
         if(node.classList && node.classList.contains('fixed-container') && node.classList.contains('bottom')){
           try { node.parentNode && node.parentNode.removeChild(node); } catch(_) {}
@@ -784,7 +1130,9 @@ class AutomationProvider extends ChangeNotifier {
 
     await _wvc!.addScriptToExecuteOnDocumentCreated(r'''
 (function(){
-  if(window.__fbBlankFixed) return;
+  if(window.__fbBlankFixed) {
+    return;
+  }
   window.__fbBlankFixed = true;
   const orig = window.open.bind(window);
   window.open = function(u,t,f){ if(u&&u!=='about:blank'){ window.location.href=u; return window; } return orig(u,t,f); };
@@ -802,12 +1150,16 @@ class AutomationProvider extends ChangeNotifier {
     await _wvc!.loadUrl('https://www.facebook.com');
     _webViewReady = true;
     notifyListeners();
+    // Start nav pool in background
+    _initPool();
   }
 
   // ── Navigation ─────────────────────────────────────────────────────────────
 
   Future<void> navigateToPost() async {
-    if (_wvc == null || _postUrl.isEmpty) return;
+    if (_wvc == null || _postUrl.isEmpty) {
+      return;
+    }
     _setStatus(AutomationStatus.navigating, 'Navigating to post…');
     await _wvc!.loadUrl(_postUrl);
     _setStatus(AutomationStatus.idle, 'Post loaded — press Start Automation.');
@@ -831,7 +1183,9 @@ class AutomationProvider extends ChangeNotifier {
   /// Falls back to URL-based loadUrl() if the group has a url and the
   /// index-based click is not available (e.g. after a page reload).
   Future<void> navigateToGroup(FBGroup group) async {
-    if (_wvc == null) return;
+    if (_wvc == null) {
+      return;
+    }
     _setStatus(AutomationStatus.navigating, 'Opening group: ${group.name}…');
 
     var clicked = false;
@@ -928,13 +1282,21 @@ class AutomationProvider extends ChangeNotifier {
           final n = int.tryParse(numStr) ?? _groupsFound;
           if (n != _groupsFound) {
             _groupsFound = n;
+            _setStatus(AutomationStatus.running, '🔄 Scraper: found $n groups so far…');
             notifyListeners();
           }
-          // Log debug info if present
+          // Show DBG info in activity log
           if (raw.contains('DBG:')) {
-            debugPrint('[Scraper DBG] ${raw.substring(raw.indexOf('DBG:'))}');
+            final dbg = raw.substring(raw.indexOf('DBG:') + 4).trim();
+            _setStatus(AutomationStatus.running, '🛠 Scraper DBG: $dbg');
+            debugPrint('[Scraper DBG] $dbg');
           }
+        } else if (msg.startsWith('RETRY:')) {
+          _setStatus(AutomationStatus.running, '⏳ Scraper: ${msg.substring(6).trim()}');
+        } else if (msg.startsWith('DONE:')) {
+          _setStatus(AutomationStatus.running, '✅ Scraper: ${msg.substring(5).trim()}');
         } else if (msg.startsWith('FINAL_DATA:')) {
+          _setStatus(AutomationStatus.running, '📦 Scraper: FINAL_DATA received — processing…');
           _handleFinalData(msg.substring(11).trim());
         }
       });
@@ -944,17 +1306,8 @@ class AutomationProvider extends ChangeNotifier {
           await rootBundle.loadString('assets/scripts/fb_group_scraper.js');
       await _wvc!.executeScript(script);
 
-      // Safety timeout — 3 minutes
-      Future.delayed(const Duration(minutes: 3), () {
-        if (_isSyncing) {
-          _isSyncing      = false;
-          _groupsFetching = false;
-          if (_groupsError == null && _groups.isEmpty) {
-            _groupsError = 'Sync timed out. Please try again.';
-          }
-          notifyListeners();
-        }
-      });
+      // No safety timeout — scraper always posts FINAL_DATA when done
+      // (even on error, the catch block posts FINAL_DATA:[])
 
     } catch (e, stack) {
       debugPrint('[fetchGroups] error: $e\n$stack');
@@ -992,6 +1345,13 @@ class AutomationProvider extends ChangeNotifier {
       _webMsgSub?.cancel();
       _webMsgSub = null;
       notifyListeners();
+      // Auto-start Deep Sync if Initialize was used
+      if (_autoDeepSync && _groupsError == null && _groups.isNotEmpty) {
+        _autoDeepSync = false;
+        Future.microtask(() => deepSync());
+      } else {
+        _autoDeepSync = false;
+      }
     }
   }
 
@@ -1010,15 +1370,21 @@ class AutomationProvider extends ChangeNotifier {
   // progress is never lost if the app is closed mid-sync.
   //
   Future<void> _saveGroupsToDisk() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _kGroups,
-      jsonEncode(_groups.map((g) => g.toJson()).toList()),
-    );
-    await prefs.setString(
-      _kCategories,
-      jsonEncode(_categories.map((c) => c.toJson()).toList()),
-    );
+    final db = DatabaseHelper.instance;
+    await db.saveGroups(_groups.map((g) => {
+      'id':          g.groupId.isNotEmpty ? g.groupId : g.name,
+      'name':        g.name,
+      'image_url':   g.imageUrl,
+      'url':         g.url,
+      'group_id':    g.groupId,
+      'category_id': g.categoryId,
+      'idx':         g.index,
+    }).toList());
+    await db.saveCategories(_categories.map((c) => {
+      'id':          c.id,
+      'name':        c.name,
+      'is_expanded': c.isExpanded ? 1 : 0,
+    }).toList());
   }
 
   // ── deepSync ───────────────────────────────────────────────────────────────
@@ -1071,7 +1437,9 @@ class AutomationProvider extends ChangeNotifier {
           '🔄 Deep Sync: loading groups page…');
       await _wvc!.loadUrl('https://www.facebook.com/groups/');
       await _waitForNavigation(timeoutMs: 28000, extraMs: 3000);
-      if (_stopDeepSync) return;
+      if (_stopDeepSync) {
+        return;
+      }
 
       _setStatus(AutomationStatus.running,
           '🔄 Deep Sync: scanning groups (auto-scrolling)…');
@@ -1081,9 +1449,7 @@ class AutomationProvider extends ChangeNotifier {
 
       final scraperDone = Completer<void>();
       StreamSubscription<dynamic>? scraperSub;
-      Future.delayed(const Duration(minutes: 3), () {
-        if (!scraperDone.isCompleted) scraperDone.complete();
-      });
+      // No timeout — scraper always posts FINAL_DATA when scroll is done
       scraperSub = _webMessageStream?.listen((dynamic raw) {
         final msg = raw?.toString() ?? '';
         if (msg.startsWith('COUNT:')) {
@@ -1096,14 +1462,18 @@ class AutomationProvider extends ChangeNotifier {
         } else if (msg.startsWith('FINAL_DATA:')) {
           _handleFinalData(msg.substring(11).trim());
           scraperSub?.cancel();
-          if (!scraperDone.isCompleted) scraperDone.complete();
+          if (!scraperDone.isCompleted) {
+            scraperDone.complete();
+          }
         }
       });
 
       await _wvc!.executeScript(script);
       await scraperDone.future;
       await scraperSub?.cancel();
-      if (_stopDeepSync) return;
+      if (_stopDeepSync) {
+        return;
+      }
 
       await Future.delayed(const Duration(milliseconds: 600));
 
@@ -1127,7 +1497,9 @@ class AutomationProvider extends ChangeNotifier {
       //   a real navigation DOES fire it.
       //
       for (int i = 0; i < total; i++) {
-        if (_stopDeepSync) break;
+        if (_stopDeepSync) {
+          break;
+        }
 
         _deepSyncIndex    = i;
         _highlightedGroup = _groups[i].name;
@@ -1156,7 +1528,9 @@ class AutomationProvider extends ChangeNotifier {
           debugPrint('[deepSync] highlight #$i failed: $e');
         }
         await Future.delayed(const Duration(milliseconds: 500));
-        if (_stopDeepSync) break;
+        if (_stopDeepSync) {
+          break;
+        }
 
         final String existingUrl = _groups[i].url;
         String resolvedUrl;
@@ -1201,7 +1575,9 @@ class AutomationProvider extends ChangeNotifier {
           resolvedUrl = await urlWatch;
         }
 
-        if (_stopDeepSync) break;
+        if (_stopDeepSync) {
+          break;
+        }
         debugPrint('[deepSync] #$i resolvedUrl="$resolvedUrl"');
 
         // ── Extract groupId with regex ─────────────────────────────
@@ -1304,7 +1680,9 @@ class AutomationProvider extends ChangeNotifier {
     Timer? timer;
 
     void resolve(String url) {
-      if (completer.isCompleted) return;
+      if (completer.isCompleted) {
+        return;
+      }
       sub?.cancel();
       timer?.cancel();
       completer.complete(url);
@@ -1320,14 +1698,20 @@ class AutomationProvider extends ChangeNotifier {
     if (useWebMessage) {
       // Strategy B: listen for NAV_URL: messages from the patched pushState.
       sub = _webMessageStream?.listen((dynamic raw) {
-        if (completer.isCompleted) return;
+        if (completer.isCompleted) {
+          return;
+        }
         if (_stopDeepSync) { resolve(fallback); return; }
 
         final msg = raw?.toString() ?? '';
-        if (!msg.startsWith('NAV_URL:')) return;
+        if (!msg.startsWith('NAV_URL:')) {
+          return;
+        }
 
         final url = msg.substring(8).trim();
-        if (!_isGroupDetailUrl(url)) return;
+        if (!_isGroupDetailUrl(url)) {
+          return;
+        }
 
         debugPrint('[waitForNavUrl][$context] NAV_URL detected: $url');
         _stabiliseAndResolve(url, resolve, context, completer);
@@ -1335,9 +1719,13 @@ class AutomationProvider extends ChangeNotifier {
     } else {
       // Strategy A: listen on WebView2 url stream for real navigations.
       sub = _urlStream?.listen((String url) {
-        if (completer.isCompleted) return;
+        if (completer.isCompleted) {
+          return;
+        }
         if (_stopDeepSync) { resolve(fallback); return; }
-        if (!_isGroupDetailUrl(url)) return;
+        if (!_isGroupDetailUrl(url)) {
+          return;
+        }
 
         debugPrint('[waitForNavUrl][$context] urlStream detected: $url');
         _stabiliseAndResolve(url, resolve, context, completer);
@@ -1366,7 +1754,9 @@ class AutomationProvider extends ChangeNotifier {
     Completer<String> completer,
   ) {
     Future.delayed(const Duration(seconds: 2), () async {
-      if (completer.isCompleted) return;
+      if (completer.isCompleted) {
+        return;
+      }
       String finalUrl = candidateUrl.split('?').first;
       try {
         // Read the live address bar — catches any further redirect.
@@ -1398,7 +1788,9 @@ class AutomationProvider extends ChangeNotifier {
   // Filters out the list root, feed, discover, and other noise paths.
   //
   static bool _isGroupDetailUrl(String url) {
-    if (!url.contains('/groups/')) return false;
+    if (!url.contains('/groups/')) {
+      return false;
+    }
     if (RegExp(r'facebook\.com/groups/?\??(?:#.*)?$', caseSensitive: false)
         .hasMatch(url)) {
       return false;
@@ -1422,13 +1814,17 @@ class AutomationProvider extends ChangeNotifier {
   //   Named:   facebook.com/groups/my-group/    → 'my-group'
   //
   static String _extractGroupId(String url) {
-    if (url.isEmpty) return '';
+    if (url.isEmpty) {
+      return '';
+    }
     final match = RegExp(
       r'facebook\.com/groups/([a-zA-Z0-9][a-zA-Z0-9._\-]*)',
       caseSensitive: false,
     ).firstMatch(url);
     final id = match?.group(1) ?? '';
-    if (id.isEmpty) return '';
+    if (id.isEmpty) {
+      return '';
+    }
     const noiseSegments = {
       'feed', 'discover', 'create', 'join', 'search',
       'members', 'requests', 'videos', 'photos', 'events',
@@ -1443,14 +1839,18 @@ class AutomationProvider extends ChangeNotifier {
     int extraMs   = 1500,
   }) async {
     final ctrl = _wvc;
-    if (ctrl == null) return false;
+    if (ctrl == null) {
+      return false;
+    }
 
     final completer = Completer<bool>();
     StreamSubscription<LoadingState>? sub;
 
     // Timeout guard
     final timer = Future.delayed(Duration(milliseconds: timeoutMs), () {
-      if (!completer.isCompleted) completer.complete(false);
+      if (!completer.isCompleted) {
+        completer.complete(false);
+      }
     });
 
     sub = ctrl.loadingState.listen((state) {
@@ -1484,7 +1884,9 @@ class AutomationProvider extends ChangeNotifier {
   // addItem: saves URL immediately, then fetches OG meta via HTTP in background.
   Future<void> addItem(String url, {String manualTitle = '', String manualDesc = ''}) async {
     final trimmed = url.trim();
-    if (trimmed.isEmpty) return;
+    if (trimmed.isEmpty) {
+      return;
+    }
 
     var item = FBItem.fromUrl(trimmed);
 
@@ -1530,7 +1932,9 @@ class AutomationProvider extends ChangeNotifier {
           .timeout(const Duration(seconds: 12));
       client.close();
 
-      if (response.statusCode != 200) return;
+      if (response.statusCode != 200) {
+        return;
+      }
 
       final bytes   = await response.fold<List<int>>(
           [], (prev, chunk) => prev..addAll(chunk));
@@ -1543,8 +1947,12 @@ class AutomationProvider extends ChangeNotifier {
                     _extractOgTag(html, 'twitter:image') ?? '';
 
       final idx = _items.indexWhere((i) => i.id == itemId);
-      if (idx == -1) return;
-      if (title.isEmpty && image.isEmpty) return;
+      if (idx == -1) {
+        return;
+      }
+      if (title.isEmpty && image.isEmpty) {
+        return;
+      }
 
       _items[idx] = _items[idx].withMeta(
         title:       title.isNotEmpty ? title : _items[idx].ogTitle,
@@ -1574,7 +1982,9 @@ class AutomationProvider extends ChangeNotifier {
       final m = re.firstMatch(html);
       if (m != null) {
         final val = _htmlDecode(m.group(1) ?? '').trim();
-        if (val.isNotEmpty) return val;
+        if (val.isNotEmpty) {
+          return val;
+        }
       }
     }
     return null;
@@ -1583,7 +1993,9 @@ class AutomationProvider extends ChangeNotifier {
   static String? _extractTitleTag(String html) {
     final m = RegExp('<title[^>]*>(.*?)</title>', caseSensitive: false, dotAll: true)
         .firstMatch(html);
-    if (m == null) return null;
+    if (m == null) {
+      return null;
+    }
     final t = _htmlDecode(m.group(1) ?? '').trim();
     // Strip " | Facebook" suffix
     return t.replaceAll(RegExp(r'\s*[|\-–]\s*Facebook\s*$', caseSensitive: false), '').trim();
@@ -1604,7 +2016,9 @@ class AutomationProvider extends ChangeNotifier {
   EmbedCardController? controllerFor(String itemId) => _embedControllers[itemId];
 
   Future<EmbedCardController> getOrCreateController(FBItem item) async {
-    if (_embedControllers.containsKey(item.id)) return _embedControllers[item.id]!;
+    if (_embedControllers.containsKey(item.id)) {
+      return _embedControllers[item.id]!;
+    }
     await WebEnvironmentManager.instance.ensureDesktopEnv();
     final ctrl = EmbedCardController(item.embedUrl);
     _embedControllers[item.id] = ctrl;
@@ -1644,7 +2058,9 @@ class AutomationProvider extends ChangeNotifier {
   // ── Legacy page list ───────────────────────────────────────────────────────
 
   Future<void> addPageToList(String url) async {
-    if (_wvc == null || url.trim().isEmpty) return;
+    if (_wvc == null || url.trim().isEmpty) {
+      return;
+    }
     final automationUrl = toAutomationUrl(url);
     _isFetching = true;
     notifyListeners();
@@ -1667,9 +2083,13 @@ class AutomationProvider extends ChangeNotifier {
   name=clean(metaContent('og:title')||metaContent('twitter:title'));
   if(skip(name)){var heads=document.querySelectorAll('h1,h2');for(var i=0;i<heads.length;i++){var t=clean(heads[i].innerText);if(t&&!skip(t)){name=t;break;}}}
   if(skip(name)){var dt=document.title.replace(/\s*[|\-\u2013]\s*Facebook\s*$/i,'').trim();if(dt&&!skip(dt))name=dt;}
-  if(!name)name='Unknown Page';
+  if(!name) {
+    name='Unknown Page';
+  }
   var imageUrl=metaContent('og:image');
-  if(!isUsable(imageUrl))imageUrl='';
+  if(!isUsable(imageUrl)) {
+    imageUrl='';
+  }
   return JSON.stringify({status:'success',name:name,imageUrl:imageUrl});
 })();
 ''';
@@ -1699,7 +2119,9 @@ class AutomationProvider extends ChangeNotifier {
       final dynamic raw = await _wvc!.executeScript('window.location.href;');
       final decoded = jsonDecode(raw.toString());
       final href = (decoded is String) ? decoded.trim() : decoded.toString().trim();
-      if (href.isEmpty || href == 'about:blank' || href == 'null') return null;
+      if (href.isEmpty || href == 'about:blank' || href == 'null') {
+        return null;
+      }
       return href;
     } catch (_) { return null; }
   }
@@ -1712,7 +2134,9 @@ class AutomationProvider extends ChangeNotifier {
 
   void removePage(FBPage page) {
     _pages.remove(page);
-    if (_selected == page) _selected = _pages.isNotEmpty ? _pages.last : null;
+    if (_selected == page) {
+      _selected = _pages.isNotEmpty ? _pages.last : null;
+    }
     _savePrefs();
     notifyListeners();
   }
@@ -1721,18 +2145,24 @@ class AutomationProvider extends ChangeNotifier {
 
   Future<bool> _waitForLoad({int timeoutMs = 15000, int extraMs = 2000}) async {
     final ctrl = _wvc;
-    if (ctrl == null) return false;
+    if (ctrl == null) {
+      return false;
+    }
     final completer = Completer<bool>();
     StreamSubscription<LoadingState>? sub;
     Future.delayed(Duration(milliseconds: timeoutMs), () {
-      if (!completer.isCompleted) completer.complete(false);
+      if (!completer.isCompleted) {
+        completer.complete(false);
+      }
     });
     sub = ctrl.loadingState.listen((state) {
       if (_stopReq && !completer.isCompleted) { sub?.cancel(); completer.complete(false); return; }
       if (state == LoadingState.navigationCompleted) {
         sub?.cancel();
         Future.delayed(Duration(milliseconds: extraMs), () {
-          if (!completer.isCompleted) completer.complete(!_stopReq);
+          if (!completer.isCompleted) {
+            completer.complete(!_stopReq);
+          }
         });
       }
     });
@@ -1758,7 +2188,15 @@ class AutomationProvider extends ChangeNotifier {
     }
     // Human-like delay before running automation (3–7 s).
     await randomDelay(minMs: 3000, maxMs: 7000);
+
+    // ── Step 1: Click the first Share button ─────────────────────────────────
     await _runMasterScript();
+    if (_status == AutomationStatus.error || _stopReq) {
+      return;
+    }
+
+    // ── Step 2: Click "Share in a Group" from the bottom sheet ───────────────
+    await clickShareInGroup();
   }
 
   void stopAutomation() {
@@ -1767,34 +2205,389 @@ class AutomationProvider extends ChangeNotifier {
   }
 
   Future<void> _runMasterScript() async {
-    if (_wvc == null) return;
+    if (_wvc == null) {
+      return;
+    }
+    _log('▶ [Step 1] _runMasterScript START');
     _setStatus(AutomationStatus.running, '🔄 Running automation…');
     try {
       final script = await rootBundle.loadString('assets/scripts/fb_master_script.js');
+      _log('[Step 1] Script loaded — executing in WebView…');
       final dynamic raw = await _wvc!.executeScript(script);
-      final result = _decodeResult(raw);
-      final st  = result['status']    as String? ?? 'unknown';
-      final msg = result['message']   as String? ?? '';
-      final lbl = result['ariaLabel'] as String? ?? '';
-      if (st == 'success') {
-        _setStatus(AutomationStatus.success, '✅ $msg${lbl.isNotEmpty ? '  [$lbl]' : ''}');
+      _log('[Step 1] RAW result: $raw');
+
+      // ── v3.1 fix: detect 'pending' sentinel ─────────────────────────────
+      // executeScript() cannot await Promises. The JS now either:
+      //   (a) returns a JSON string directly when the button is found sync, OR
+      //   (b) returns the string 'pending' and posts 'MASTER_RESULT:<json>'
+      //       via window.chrome.webview.postMessage when the observer fires.
+      final rawStr = raw?.toString().trim() ?? '';
+      if (rawStr == 'pending' || rawStr == '"pending"') {
+        _log('[Step 1] JS returned "pending" — waiting for MASTER_RESULT webMessage…');
+        final completer = Completer<Map<String, dynamic>>();
+        StreamSubscription<dynamic>? sub;
+        final timer = Future.delayed(const Duration(seconds: 12), () {
+          if (!completer.isCompleted) {
+            completer.complete({'status': 'failed', 'message': 'Timed out waiting for MASTER_RESULT webMessage.'});
+          }
+        });
+        sub = _webMessageStream?.listen((dynamic msg) {
+          final s = msg?.toString() ?? '';
+          if (s.startsWith('MASTER_RESULT:')) {
+            sub?.cancel();
+            final json = s.substring('MASTER_RESULT:'.length).trim();
+            _log('[Step 1] MASTER_RESULT webMessage received: $json');
+            if (!completer.isCompleted) {
+              completer.complete(_decodeResult(json));
+            }
+          }
+        });
+        final result = await completer.future;
+        await sub?.cancel();
+        timer.ignore();
+        _log('[Step 1] DECODED result: $result');
+        final st  = result['status']    as String? ?? 'unknown';
+        final msg = result['message']   as String? ?? '';
+        final lbl = result['ariaLabel'] as String? ?? '';
+        _log('[Step 1] status=$st  message=$msg  ariaLabel=$lbl');
+        if (st == 'success') {
+          _log('[Step 1] ✅ SUCCESS — Share button clicked');
+          _setStatus(AutomationStatus.success, '✅ $msg${lbl.isNotEmpty ? '  [$lbl]' : ''}');
+        } else {
+          _log('[Step 1] ❌ FAILED — $msg');
+          _setStatus(AutomationStatus.error, '❌ $msg');
+        }
       } else {
-        _setStatus(AutomationStatus.error, '❌ $msg');
+        // ── Path A: synchronous result (button found immediately) ──────────
+        final result = _decodeResult(raw);
+        _log('[Step 1] DECODED result: $result');
+        final st  = result['status']    as String? ?? 'unknown';
+        final msg = result['message']   as String? ?? '';
+        final lbl = result['ariaLabel'] as String? ?? '';
+        _log('[Step 1] status=$st  message=$msg  ariaLabel=$lbl');
+        if (st == 'success') {
+          _log('[Step 1] ✅ SUCCESS — Share button clicked');
+          _setStatus(AutomationStatus.success, '✅ $msg${lbl.isNotEmpty ? '  [$lbl]' : ''}');
+        } else {
+          _log('[Step 1] ❌ FAILED — $msg');
+          _setStatus(AutomationStatus.error, '❌ $msg');
+        }
       }
-    } catch (e) {
+    } catch (e, stack) {
+      _log('[Step 1] ❌ EXCEPTION: $e');
+      _log('[Step 1] STACK: $stack');
       _setStatus(AutomationStatus.error, '❌ Script error: $e');
     }
+    _log('■ [Step 1] _runMasterScript END');
+  }
+
+  // ── Step 2: Click "Share in a Group" from the bottom share menu ───────────
+  Future<void> clickShareInGroup() async {
+    if (_wvc == null) {
+      return;
+    }
+
+    // Smart wait: poll the DOM every 300ms until "Share in a Group" button
+    // appears (or until 12s timeout). This replaces the old blind 5000ms delay.
+    _log('[Step 2] ⏳ Polling DOM for bottom sheet appearance…');
+    const pollJs = r"""
+      (function() {
+        var keywords = ['share in a group', 'කණ්ඩායමක බෙදාගන්න', 'බෙදාගන්න'];
+        // Check aria-label
+        var allBtns = Array.from(document.querySelectorAll('[role="button"], button, a'));
+        for (var i = 0; i < allBtns.length; i++) {
+          var lbl = (allBtns[i].getAttribute('aria-label') || '').toLowerCase();
+          for (var k = 0; k < keywords.length; k++) {
+            if (lbl.includes(keywords[k])) return 'found';
+          }
+          var txt = allBtns[i].textContent.toLowerCase();
+          for (var k = 0; k < keywords.length; k++) {
+            if (txt.includes(keywords[k])) return 'found';
+          }
+        }
+        return 'waiting';
+      })();
+    """;
+
+    const int pollIntervalMs = 300;
+    const int pollTimeoutMs  = 12000;
+    int elapsed = 0;
+    bool sheetReady = false;
+    while (elapsed < pollTimeoutMs) {
+      await Future.delayed(const Duration(milliseconds: pollIntervalMs));
+      elapsed += pollIntervalMs;
+      try {
+        final dynamic pollRaw = await _wvc!.executeScript(pollJs);
+        final String pollResult = pollRaw?.toString() ?? '';
+        _log('[Step 2] poll [$elapsed ms] → $pollResult');
+        if (pollResult.contains('found')) {
+          sheetReady = true;
+          _log('[Step 2] ✅ Bottom sheet ready after ${elapsed}ms');
+          break;
+        }
+      } catch (e) {
+        _log('[Step 2] poll error: $e');
+      }
+    }
+
+    if (!sheetReady) {
+      _log('[Step 2] ⚠️ Bottom sheet not detected after ${pollTimeoutMs}ms — trying anyway…');
+    }
+
+    const js = r"""
+      (function () {
+        'use strict';
+
+        // Fires a realistic pointer+mouse+click event sequence on an element.
+        // Uses real PointerEvent for pointerdown/pointerup (not MouseEvent),
+        // because Facebook's React synthetic event system listens specifically
+        // for PointerEvent types — dispatching MouseEvent for pointer events
+        // causes them to be silently ignored.
+        function fireClick(el) {
+          var center = el.getBoundingClientRect();
+          var cx = center.left + center.width  / 2;
+          var cy = center.top  + center.height / 2;
+          var opts = { bubbles: true, cancelable: true, view: window,
+                       clientX: cx, clientY: cy, pointerId: 1,
+                       pointerType: 'touch', isPrimary: true };
+
+          // 1. Scroll into view first
+          el.scrollIntoView({ block: 'center', behavior: 'instant' });
+
+          // 2. Focus
+          try { el.focus(); } catch(_) {}
+
+          // 3. Pointer events (must be PointerEvent, not MouseEvent)
+          el.dispatchEvent(new PointerEvent('pointerover',  opts));
+          el.dispatchEvent(new PointerEvent('pointerenter', opts));
+          el.dispatchEvent(new PointerEvent('pointerdown',  opts));
+
+          // 4. Mouse events
+          el.dispatchEvent(new MouseEvent('mousedown', {
+            bubbles: true, cancelable: true, view: window,
+            clientX: cx, clientY: cy
+          }));
+
+          // 5. Release
+          el.dispatchEvent(new PointerEvent('pointerup', opts));
+          el.dispatchEvent(new MouseEvent('mouseup', {
+            bubbles: true, cancelable: true, view: window,
+            clientX: cx, clientY: cy
+          }));
+
+          // 6. Click
+          el.dispatchEvent(new MouseEvent('click', {
+            bubbles: true, cancelable: true, view: window,
+            clientX: cx, clientY: cy
+          }));
+
+          // 7. Native .click() as final fallback
+          try { el.click(); } catch(_) {}
+        }
+
+        // Walk up from el to the nearest role="button" ancestor (inclusive).
+        function nearestButton(el) {
+          var cur = el;
+          while (cur) {
+            if (cur.getAttribute && cur.getAttribute('role') === 'button') {
+              return cur;
+            }
+            cur = cur.parentElement;
+          }
+          return el; // nothing found — click el itself
+        }
+
+        // Check element is visible on screen
+        function isVisible(el) {
+          if (!el) {
+            return false;
+          }
+          var r = el.getBoundingClientRect();
+          if (!r.width || !r.height) {
+            return false;
+          }
+          var cs = window.getComputedStyle(el);
+          return cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0';
+        }
+
+        // ── Search root: dialog-screen first, fallback to document ──────────
+        // Main screen has inert="true" when dialog is open — buttons found
+        // there by querySelector exist in DOM but cannot be clicked.
+        // Always scope search to .dialog-screen (the visible bottom sheet).
+        var dialogScreen = document.querySelector('.dialog-screen');
+        var root = dialogScreen || document;
+
+        // ── Strategy A: aria-label exact match (dialog-screen scoped) ────────
+        var btn = root.querySelector('[aria-label="Share in a Group"]');
+        if (btn && isVisible(btn)) {
+          fireClick(btn);
+          return JSON.stringify({ status: 'success', strategy: 'aria-label-dialog' });
+        }
+
+        // Fallback A2: full document (in case dialog class name changed)
+        btn = document.querySelector('[aria-label="Share in a Group"]');
+        if (btn && isVisible(btn)) {
+          fireClick(btn);
+          return JSON.stringify({ status: 'success', strategy: 'aria-label-doc' });
+        }
+
+        // ── Strategy B: aria-label case-insensitive ───────────────────────────
+        var allBtns = Array.from(root.querySelectorAll('[role="button"], button, a'));
+        for (var k = 0; k < allBtns.length; k++) {
+          var lbl = (allBtns[k].getAttribute('aria-label') || '').toLowerCase();
+          if (lbl.includes('share in a group') && isVisible(allBtns[k])) {
+            fireClick(allBtns[k]);
+            return JSON.stringify({ status: 'success', strategy: 'aria-label-ci' });
+          }
+        }
+
+        // ── Strategy C: exact text in dialog-screen ───────────────────────────
+        var all = Array.from(root.querySelectorAll('*'));
+        for (var i = 0; i < all.length; i++) {
+          var el = all[i];
+          if (el.children.length <= 3 &&
+              el.textContent.trim() === 'Share in a Group' &&
+              isVisible(el)) {
+            var target = nearestButton(el);
+            fireClick(target);
+            return JSON.stringify({ status: 'success', strategy: 'text-walk' });
+          }
+        }
+
+        // ── Strategy D: partial text match ───────────────────────────────────
+        var all2 = Array.from(root.querySelectorAll('div[role="button"], button, a'));
+        for (var j = 0; j < all2.length; j++) {
+          if (all2[j].textContent.toLowerCase().includes('share in a group') &&
+              isVisible(all2[j])) {
+            fireClick(all2[j]);
+            return JSON.stringify({ status: 'success', strategy: 'partial-text' });
+          }
+        }
+
+        // ── Strategy E: Sinhala label "කණ්ඩායමක බෙදාගන්න" ───────────────────
+        var all3 = Array.from(root.querySelectorAll('*'));
+        for (var m = 0; m < all3.length; m++) {
+          var txt = all3[m].textContent.trim();
+          if ((txt.includes('\u0D9A\u0DAB\u0DCA\u0DA9\u0DCF\u0DBA\u0DB8\u0D9A') ||
+               txt.includes('\u0DB6\u0DD9\u0DAF\u0DCF\u0D9C\u0DB1\u0DCA\u0DB1')) &&
+              all3[m].children.length <= 3 && isVisible(all3[m])) {
+            var t2 = nearestButton(all3[m]);
+            fireClick(t2);
+            return JSON.stringify({ status: 'success', strategy: 'sinhala-text' });
+          }
+        }
+
+        // ── Debug: dump all visible buttons with aria-label + text ───────────
+        var foundBtns = Array.from(document.querySelectorAll('[role="button"], button, a'))
+          .filter(function(b) { return isVisible(b); })
+          .map(function(b) {
+            var lbl  = b.getAttribute('aria-label') || '';
+            var txt  = b.textContent.trim().slice(0, 60);
+            var tag  = b.tagName;
+            var kids = b.children.length;
+            return tag + ' | aria="' + lbl + '" | text="' + txt + '" | children=' + kids;
+          })
+          .filter(function(t) { return t.length > 0; });
+
+        // Also dump ALL elements that contain "share" or "group" text anywhere
+        var shareEls = Array.from(document.querySelectorAll('*'))
+          .filter(function(el) {
+            var lbl = (el.getAttribute('aria-label') || '').toLowerCase();
+            var txt = (el.textContent || '').toLowerCase();
+            return lbl.includes('share') || lbl.includes('group') ||
+                   txt.includes('share in a group') || txt.includes('කණ්ඩායමක');
+          })
+          .slice(0, 10)
+          .map(function(el) {
+            return el.tagName + '[role=' + (el.getAttribute('role')||'none') + ']' +
+                   ' aria="' + (el.getAttribute('aria-label')||'') + '"' +
+                   ' text="' + el.textContent.trim().slice(0, 50) + '"' +
+                   ' visible=' + isVisible(el);
+          });
+
+        return JSON.stringify({
+          status: 'error',
+          message: 'Share in a Group button not found',
+          found_buttons: foundBtns.slice(0, 25),
+          share_related: shareEls
+        });
+      })();
+    """;
+
+    _log('▶ [Step 2] clickShareInGroup START — waiting 5s for bottom sheet…');
+    _setStatus(AutomationStatus.running, '🔄 Looking for "Share in a Group"…');
+    try {
+      _log('[Step 2] Executing JS in WebView…');
+      final dynamic raw = await _wvc!.executeScript(js);
+      _log('[Step 2] RAW result: $raw');
+      final result = _decodeResult(raw);
+      _log('[Step 2] DECODED result: $result');
+      final st       = result['status']   as String? ?? 'unknown';
+      final strategy = result['strategy'] as String? ?? '';
+      final msg      = result['message']  as String? ?? '';
+      _log('[Step 2] status=$st  strategy=$strategy  message=$msg');
+
+      if (st == 'success') {
+        _log('[Step 2] ✅ SUCCESS — clicked via strategy: $strategy');
+        _setStatus(AutomationStatus.success, '✅ "Share in a Group" clicked [$strategy]');
+      } else {
+        final foundBtns    = result['found_buttons'];
+        final shareRelated = result['share_related'];
+        _log('[Step 2] ❌ FAILED — button not found!');
+        _log('[Step 2] 📋 Visible buttons on screen:');
+        if (foundBtns is List) {
+          for (var i = 0; i < foundBtns.length; i++) {
+            _log('[Step 2]   [$i] ${foundBtns[i]}');
+          }
+        } else {
+          _log('[Step 2]   (no button list returned) raw=$foundBtns');
+        }
+        _log('[Step 2] 🔍 Share/Group related elements:');
+        if (shareRelated is List) {
+          for (var i = 0; i < shareRelated.length; i++) {
+            _log('[Step 2]   [SR$i] ${shareRelated[i]}');
+          }
+        } else {
+          _log('[Step 2]   (none found)');
+        }
+        _setStatus(AutomationStatus.error,
+          '❌ Share in a Group not found — ${foundBtns is List ? foundBtns.length : 0} buttons visible (check terminal log)');
+      }
+    } catch (e, stack) {
+      _log('[Step 2] ❌ EXCEPTION: $e');
+      _log('[Step 2] STACK: $stack');
+      _setStatus(AutomationStatus.error, '❌ clickShareInGroup failed: $e');
+    }
+    _log('■ [Step 2] clickShareInGroup END');
   }
 
   // ── Internal helpers ───────────────────────────────────────────────────────
 
+  // ── Verbose logger — prints to Flutter console AND writes to automation_debug.log ──
+  void _log(String msg) {
+    final ts = DateTime.now().toIso8601String().substring(11, 23); // HH:mm:ss.mmm
+    final line = '[$ts] $msg';
+    debugPrint(line);
+    // Also write to a file so it survives app restarts and can be read by any terminal
+    try {
+      final logFile = File('automation_debug.log');
+      logFile.writeAsStringSync('$line\n', mode: FileMode.append, flush: true);
+    } catch (_) {}
+  }
+
   Map<String, dynamic> _decodeResult(dynamic raw) {
-    if (raw is Map) return Map<String, dynamic>.from(raw);
+    if (raw is Map) {
+      return Map<String, dynamic>.from(raw);
+    }
     var s = raw.toString().trim();
-    if (s.isEmpty) return {'status': 'failed', 'message': 'Empty response'};
+    if (s.isEmpty) {
+      return {'status': 'failed', 'message': 'Empty response'};
+    }
     dynamic step1;
     try { step1 = jsonDecode(s); } catch (_) { return {'status': 'failed', 'message': 'Non-JSON: $s'}; }
-    if (step1 is Map) return Map<String, dynamic>.from(step1);
+    if (step1 is Map) {
+      return Map<String, dynamic>.from(step1);
+    }
     if (step1 is String) {
       try { final step2 = jsonDecode(step1); if (step2 is Map) return Map<String, dynamic>.from(step2); } catch (_) {}
     }
@@ -1812,6 +2605,7 @@ class AutomationProvider extends ChangeNotifier {
     _netTimer?.cancel();
     _webMsgSub?.cancel();
     _wvc?.dispose();
+    for (final ctrl in _pool) { ctrl?.dispose(); }
     for (final ctrl in _embedControllers.values) {
       ctrl.removeListener(notifyListeners);
       ctrl.dispose();
